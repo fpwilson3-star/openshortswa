@@ -1,5 +1,18 @@
 import os
+import shutil
 import subprocess
+
+
+CAPTION_FONT_DIR = "fonts"
+CAPTION_FONT_NAME = "Coolvetica"
+CAPTION_FONT_PATH = os.path.join(CAPTION_FONT_DIR, "Coolvetica.ttf")
+
+
+def ensure_caption_font():
+    """Caption font is a licensed local font bundled in fonts/, not auto-downloaded."""
+    if not os.path.exists(CAPTION_FONT_PATH):
+        print(f"⚠️  Caption font missing at {CAPTION_FONT_PATH} — libass will fall back to its default")
+    return CAPTION_FONT_PATH
 
 
 def transcribe_audio(video_path):
@@ -218,6 +231,145 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
 
     if result.returncode != 0:
         print(f"❌ FFmpeg Subtitle Error: {result.stderr.decode()}")
+        raise Exception(f"FFmpeg failed: {result.stderr.decode()}")
+
+    return True
+
+
+def _group_words_into_blocks(words, max_chars=22, max_duration=2.0):
+    blocks = []
+    current = []
+    for w in words:
+        if not current:
+            current = [w]
+            continue
+        text_len = sum(len(x['word']) + 1 for x in current)
+        duration = w['end'] - current[0]['start']
+        if text_len + len(w['word']) > max_chars or duration > max_duration:
+            blocks.append(current)
+            current = [w]
+        else:
+            current.append(w)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def _ass_time(t):
+    if t < 0:
+        t = 0
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = t - h * 3600 - m * 60
+    cs = int(round((s - int(s)) * 100))
+    if cs >= 100:
+        cs = 99
+    return f"{h}:{m:02d}:{int(s):02d}.{cs:02d}"
+
+
+def generate_karaoke_ass(transcript, clip_start, clip_end, output_path,
+                        play_res_x=1080, play_res_y=1920,
+                        max_chars=22, max_duration=2.0,
+                        font_name=CAPTION_FONT_NAME, fontsize=78,
+                        normal_color="#FFFFFF", highlight_color="#FFEE00",
+                        outline_color="#000000", outline_width=4,
+                        margin_v=240):
+    """
+    Build a karaoke-style ASS file: one event per word, each showing the full
+    block with that word highlighted. Words within a block stay visible during
+    gaps by extending each event to the start of the next word.
+    """
+    words = []
+    for segment in transcript.get('segments', []):
+        for w in segment.get('words', []):
+            if w['end'] > clip_start and w['start'] < clip_end:
+                words.append(w)
+
+    if not words:
+        return False
+
+    blocks = _group_words_into_blocks(words, max_chars=max_chars, max_duration=max_duration)
+
+    primary = hex_to_ass_color(normal_color, 1.0)
+    outline = hex_to_ass_color(outline_color, 1.0)
+    highlight = hex_to_ass_color(highlight_color, 1.0)
+    back = hex_to_ass_color("#000000", 0.0)
+
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {play_res_x}\n"
+        f"PlayResY: {play_res_y}\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, "
+        "Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Default,{font_name},{fontsize},{primary},{primary},{outline},{back},"
+        f"-1,0,0,0,100,100,0,0,1,{outline_width},0,2,60,60,{margin_v},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+
+    lines = [header]
+    for block in blocks:
+        block_end_time = block[-1]['end'] - clip_start
+        for i, w in enumerate(block):
+            start = w['start'] - clip_start
+            end = block[i + 1]['start'] - clip_start if i + 1 < len(block) else block_end_time
+            parts = []
+            for j, ww in enumerate(block):
+                clean = ww['word'].strip()
+                if not clean:
+                    continue
+                if j == i:
+                    parts.append(f"{{\\c{highlight}}}{clean}{{\\r}}")
+                else:
+                    parts.append(clean)
+            text = " ".join(parts)
+            lines.append(
+                f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,0,0,0,,{text}"
+            )
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(lines) + "\n")
+    return True
+
+
+def burn_karaoke_subtitles(video_path, ass_path, output_path, fonts_dir=CAPTION_FONT_DIR):
+    """Burn karaoke ASS subtitles. fontsdir points libass at the bundled font.
+
+    Copies the ASS file to a sanitized path before invoking ffmpeg so apostrophes
+    and other shell-special chars in the original filename don't break the
+    `-vf subtitles='...'` single-quoted filter syntax.
+    """
+    safe_dir = os.path.dirname(ass_path) or '.'
+    safe_ass_path = os.path.join(safe_dir, '_caps.ass')
+    shutil.copy(ass_path, safe_ass_path)
+
+    safe_ass = safe_ass_path.replace('\\', '/').replace(':', '\\:')
+    safe_fonts = fonts_dir.replace('\\', '/').replace(':', '\\:')
+
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', video_path,
+        '-vf', f"subtitles='{safe_ass}':fontsdir='{safe_fonts}'",
+        '-c:a', 'copy',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        output_path
+    ]
+
+    print(f"🎤 Burning karaoke subtitles: {' '.join(cmd)}")
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    finally:
+        if os.path.exists(safe_ass_path):
+            os.remove(safe_ass_path)
+
+    if result.returncode != 0:
+        print(f"❌ FFmpeg Karaoke Error: {result.stderr.decode()}")
         raise Exception(f"FFmpeg failed: {result.stderr.decode()}")
 
     return True

@@ -1,181 +1,144 @@
 import os
+import re
 import textwrap
 import subprocess
-import urllib.request
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-FONT_URL = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSerif/NotoSerif-Bold.ttf"
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001F5FF"
+    "\U0001F600-\U0001F64F"
+    "\U0001F680-\U0001F6FF"
+    "\U0001F700-\U0001F77F"
+    "\U0001F780-\U0001F7FF"
+    "\U0001F800-\U0001F8FF"
+    "\U0001F900-\U0001F9FF"
+    "\U0001FA00-\U0001FA6F"
+    "\U0001FA70-\U0001FAFF"
+    "\U0001FB00-\U0001FBFF"
+    "\U00002600-\U000027BF"
+    "\U0001F1E0-\U0001F1FF"
+    "‍"
+    "️"
+    "]+",
+    flags=re.UNICODE,
+)
+
+def _strip_emojis(text):
+    return _EMOJI_RE.sub("", text or "").strip()
+
 FONT_DIR = "fonts"
-FONT_PATH = os.path.join(FONT_DIR, "NotoSerif-Bold.ttf")
+FONT_PATH = os.path.join(FONT_DIR, "Coolvetica.ttf")
 
 def download_font_if_needed():
-    """Downloads a serif font for the hook text if not present."""
-    if not os.path.exists(FONT_DIR):
-        os.makedirs(FONT_DIR)
+    """Hook font is a licensed local font — bundled in fonts/, not auto-downloaded."""
     if not os.path.exists(FONT_PATH):
-        print(f"⬇️ Downloading font from {FONT_URL}...")
-        try:
-            # Add user agent to avoid 403s slightly
-            req = urllib.request.Request(
-                FONT_URL, 
-                headers={'User-Agent': 'Mozilla/5.0'}
-            )
-            with urllib.request.urlopen(req) as response, open(FONT_PATH, 'wb') as out_file:
-                out_file.write(response.read())
-            print("✅ Font downloaded.")
-        except Exception as e:
-            print(f"❌ Failed to download font: {e}")
+        print(f"⚠️  Hook font missing at {FONT_PATH} — falling back to PIL default")
+    return os.path.exists(FONT_PATH)
 
 def create_hook_image(text, target_width, output_image_path="hook_overlay.png", font_scale=1.0):
     """
-    Generates a white box with black serif text using pixel-based wrapping.
-    target_width: The max width the box should occupy (e.g. 85% of video)
+    Generates a white rounded box with bold sans-serif text, vertically and
+    horizontally centered using font.getmetrics() for consistent line heights.
+    target_width: max width the box should occupy (e.g. 85% of video).
     """
     download_font_if_needed()
-    
-    # Configuration
-    padding_x = 30 # Balanced padding
-    padding_y = 25 
-    line_spacing = 20 # Increased spacing
+
+    padding_x = 36
+    padding_y = 30
     cornerradius = 20
-    shadow_offset = (5, 5) 
-    shadow_blur = 10
-    
-    # Font Size Calculation (approx 5% of width - tuned to match Noto Serif Bold metrics in browser)
-    base_font_size = int(target_width * 0.05)
+    shadow_offset = (5, 5)
+
+    # Inter Bold is a bit denser than Noto Serif Bold — slightly smaller ratio.
+    base_font_size = int(target_width * 0.046)
     font_size = int(base_font_size * font_scale)
-    
+
     try:
         font = ImageFont.truetype(FONT_PATH, font_size)
     except Exception as e:
-        print(f"⚠️ Warning: Could not load font {FONT_PATH}, using default. Error: {e}")
+        print(f"⚠️ Could not load font {FONT_PATH}, using default. Error: {e}")
         font = ImageFont.load_default()
 
-    # Wrap text logic (Pixel-based)
-    dummy_img = Image.new('RGBA', (1, 1))
-    draw = ImageDraw.Draw(dummy_img)
-    
+    ascent, descent = font.getmetrics()
+    visual_line_height = ascent + descent
+    extra_line_gap = int(visual_line_height * 0.15)
+    line_advance = visual_line_height + extra_line_gap
+
+    # Text wrap (pixel-based using font.getlength for speed)
     max_text_width = target_width - (2 * padding_x)
-    
-    # Handle manual newlines first
-    paragraphs = text.split('\n')
+    paragraphs = (text or "").split('\n')
     lines = []
-    
     for p in paragraphs:
         if not p.strip():
-            lines.append("") 
+            lines.append("")
             continue
-            
         words = p.split()
-        current_line = []
-        
+        current = []
         for word in words:
-            # Test if adding word fits
-            test_line = ' '.join(current_line + [word])
-            bbox = draw.textbbox((0, 0), test_line, font=font)
-            w = bbox[2] - bbox[0]
-            
-            if w <= max_text_width:
-                current_line.append(word)
+            candidate = ' '.join(current + [word])
+            if font.getlength(candidate) <= max_text_width:
+                current.append(word)
             else:
-                # Line full, push current_line and start new
-                if current_line:
-                    lines.append(' '.join(current_line))
-                    current_line = [word]
+                if current:
+                    lines.append(' '.join(current))
+                    current = [word]
                 else:
-                    # Single word too long? Force it.
                     lines.append(word)
-                    current_line = []
-        
-        if current_line:
-            lines.append(' '.join(current_line))
-    
-    # Recalculate true width/height
-    max_line_width = 0
-    text_heights = []
-    
-    for line in lines:
-        if not line:
-            text_heights.append(font_size) # Use font size for empty line height
-            continue
-            
-        bbox = draw.textbbox((0, 0), line, font=font)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-        max_line_width = max(max_line_width, w)
-        text_heights.append(h)
-    
-    # Box dimensions
-    # We want the box to fit the text exactly + padding
-    # Ensure min width for aesthetic reasons if text is short (at least 30% of target)
-    box_width = max(max_line_width + (2 * padding_x), int(target_width * 0.3))
-    
-    # Total Text Height: sum(heights) + spacing * (n-1)
-    if not text_heights:
-         total_text_height = font_size
-    else:
-         total_text_height = sum(text_heights) + (len(text_heights) - 1) * line_spacing
-         
+                    current = []
+        if current:
+            lines.append(' '.join(current))
+
+    if not lines:
+        lines = [""]
+
+    max_line_width = max((font.getlength(l) for l in lines), default=0)
+    box_width = max(int(max_line_width) + (2 * padding_x), int(target_width * 0.3))
+
+    total_text_height = len(lines) * visual_line_height + max(0, len(lines) - 1) * extra_line_gap
     box_height = total_text_height + (2 * padding_y)
-    
-    # Create Final Image with Rounded Corners and Shadow
-    # 1. Canvas for Shadow (larger than box)
+
     canvas_w = box_width + 40
     canvas_h = box_height + 40
-    
+
     img = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    
-    # 2. Draw Shadow
+
     shadow_box = [
         (20 + shadow_offset[0], 20 + shadow_offset[1]),
-        (20 + box_width + shadow_offset[0], 20 + box_height + shadow_offset[1])
+        (20 + box_width + shadow_offset[0], 20 + box_height + shadow_offset[1]),
     ]
     draw.rounded_rectangle(shadow_box, radius=cornerradius, fill=(0, 0, 0, 100))
-    
-    # 3. Blur Shadow
     img = img.filter(ImageFilter.GaussianBlur(5))
-    
-    # 4. Draw White Box (sharper, on top of blurred shadow)
+
     draw_final = ImageDraw.Draw(img)
-    
-    main_box = [
-        (20, 20),
-        (20 + box_width, 20 + box_height)
-    ]
-    # Semi-transparent white (240/255 alpha ~ 94% opacity)
+    main_box = [(20, 20), (20 + box_width, 20 + box_height)]
     draw_final.rounded_rectangle(main_box, radius=cornerradius, fill=(255, 255, 255, 240))
-    
-    # 5. Draw Text
-    current_y = 20 + padding_y - 2 # Minor visual adjustment
-    for i, line in enumerate(lines):
-        if not line:
-            current_y += font_size + line_spacing 
-            continue
-            
-        bbox = draw_final.textbbox((0, 0), line, font=font)
-        line_w = bbox[2] - bbox[0]
-        line_h = text_heights[i] if i < len(text_heights) else bbox[3] - bbox[1]
-        
-        # Center X
-        x = 20 + (box_width - line_w) // 2
-        
-        # Draw Black Text
-        draw_final.text((x, current_y), line, font=font, fill="black")
-        
-        current_y += line_h + line_spacing
-        
+
+    # Draw lines positioned by baseline — consistent vertical rhythm regardless of glyph content.
+    baseline_y = 20 + padding_y + ascent
+    for line in lines:
+        if line:
+            line_w = font.getlength(line)
+            x = 20 + (box_width - int(line_w)) // 2
+            draw_final.text((x, baseline_y), line, font=font, fill="black", anchor="ls")
+        baseline_y += line_advance
+
     img.save(output_image_path)
     return output_image_path, canvas_w, canvas_h
 
-def add_hook_to_video(video_path, text, output_path, position="top", font_scale=1.0):
+def add_hook_to_video(video_path, text, output_path, position="top", font_scale=1.0, duration=None):
     """
     Overlays text hook onto video.
     position: 'top', 'center', 'bottom'
     font_scale: float multiplier (1.0 = default)
+    duration: if set, overlay only displays for the first `duration` seconds
     """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video {video_path} not found")
+
+    text = _strip_emojis(text)
+    if not text:
+        raise ValueError("Hook text is empty after stripping emojis")
 
     # 1. Probe video width to scale text properly
     try:
@@ -189,46 +152,50 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         print(f"⚠️ FFprobe failed: {e}. Assuming 1080x1920")
         video_width = 1080
         video_height = 1920
-        
+
     # 2. Generate Image
     # Box check: Don't let it be wider than 90% of screen
     target_box_width = int(video_width * 0.9)
-    
+
     hook_filename = f"temp_hook_{os.path.basename(video_path)}.png"
     # Ensure unique or temp location if needed, but relative is fine for this app structure
-    
+
     try:
         img_path, box_w, box_h = create_hook_image(text, target_box_width, hook_filename, font_scale=font_scale)
-        
+
         # 3. Calculate Overlay Position
         overlay_x = (video_width - box_w) // 2
-        
+
         if position == "center":
             overlay_y = (video_height - box_h) // 2
         elif position == "bottom":
              # Bottom 20% mark (approx)
              overlay_y = int(video_height * 0.70)
         else:
-             # Top 20% mark
-             overlay_y = int(video_height * 0.20)
-        
+             # Top ~8% mark — near the top edge but clear of phone notch/status overlays
+             overlay_y = int(video_height * 0.08)
+
         # 4. FFmpeg Command
         print(f"🎬 Overlaying hook: '{text}' at {overlay_x},{overlay_y}")
-        
+
+        overlay_expr = f"[0:v][1:v]overlay={overlay_x}:{overlay_y}"
+        if duration is not None:
+            overlay_expr += f":enable='between(t,0,{duration})'"
+
         ffmpeg_cmd = [
             'ffmpeg', '-y',
             '-i', video_path,
             '-i', img_path,
-            '-filter_complex', f"[0:v][1:v]overlay={overlay_x}:{overlay_y}",
+            '-filter_complex', overlay_expr,
             '-c:a', 'copy',
             '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
             output_path
         ]
-        
+
         subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print(f"✅ Hook added to {output_path}")
         return True
-        
+
     except subprocess.CalledProcessError as e:
         print(f"❌ FFmpeg Error: {e.stderr.decode() if e.stderr else 'Unknown'}")
         raise e

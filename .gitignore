@@ -30,6 +30,11 @@ output/
 # Generated metadata
 *_metadata.json
 
+# Debug / build artifacts
+*_check.png
+branded_frame.png
+compose-build.log
+
 # Cache dirs
 .cache/
 .config/

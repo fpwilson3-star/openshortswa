@@ -15,11 +15,12 @@ logger.setLevel(logging.INFO)
 
 def upload_file_to_s3(file_path, bucket_name, s3_key):
     """
-    Upload a file to an S3 bucket silently.
+    Upload a file to an S3-compatible bucket (AWS S3 or Cloudflare R2) silently.
     """
     access_key = os.environ.get('AWS_ACCESS_KEY_ID')
     secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
     region = os.environ.get('AWS_REGION', 'eu-west-3')
+    endpoint_url = os.environ.get('S3_ENDPOINT_URL') or None
 
     if not access_key or not secret_key:
         return False
@@ -28,7 +29,8 @@ def upload_file_to_s3(file_path, bucket_name, s3_key):
         's3',
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
-        region_name=region
+        region_name=region,
+        endpoint_url=endpoint_url,
     )
     try:
         # Extra arguments for public read if needed, but the user didn't specify.
@@ -53,10 +55,11 @@ _clips_cache = {
 CACHE_TTL_SECONDS = 300  # 5 minutes
 
 def get_s3_client():
-    """Returns an authenticated S3 client."""
+    """Returns an authenticated S3-compatible client (AWS S3 or Cloudflare R2)."""
     access_key = os.environ.get('AWS_ACCESS_KEY_ID')
     secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
     region = os.environ.get('AWS_REGION', 'eu-west-3')
+    endpoint_url = os.environ.get('S3_ENDPOINT_URL') or None
 
     if not access_key or not secret_key:
         return None
@@ -66,6 +69,7 @@ def get_s3_client():
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         region_name=region,
+        endpoint_url=endpoint_url,
         config=Config(signature_version='s3v4')
     )
 

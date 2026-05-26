@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
+from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery, upload_file_to_s3, generate_presigned_url
 
 load_dotenv()
 
@@ -29,7 +29,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Default to 1 if not set, but user can set higher for powerful servers
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "5"))
 MAX_FILE_SIZE_MB = 2048  # 2GB limit
-JOB_RETENTION_SECONDS = 3600  # 1 hour retention
+JOB_RETENTION_SECONDS = 86400  # 24 hour retention
 DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in ("1", "true", "yes")
 
 # Application State
@@ -318,13 +318,15 @@ async def process_endpoint(
     request: Request,
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
-    acknowledged: Optional[str] = Form(None)
+    acknowledged: Optional[str] = Form(None),
+    burn_subtitles: Optional[str] = Form(None)
 ):
     api_key = request.headers.get("X-Gemini-Key")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
+    burn_subs_flag = str(burn_subtitles).lower() in ("1", "true", "yes")
 
     # Handle JSON body manually for URL payload
     content_type = request.headers.get("content-type", "")
@@ -332,6 +334,7 @@ async def process_endpoint(
         body = await request.json()
         url = body.get("url")
         ack_flag = bool(body.get("acknowledged"))
+        burn_subs_flag = bool(body.get("burn_subtitles"))
 
     if not url and not file:
         raise HTTPException(status_code=400, detail="Must provide URL or File")
@@ -387,6 +390,9 @@ async def process_endpoint(
         cmd.extend(["-i", input_path])
 
     cmd.extend(["-o", job_output_dir])
+
+    if burn_subs_flag:
+        cmd.append("--burn-subtitles")
 
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
@@ -2253,4 +2259,206 @@ async def saasshorts_voices(
             for name, vid in DEFAULT_VOICES.items()
         ],
         "source": "defaults",
+    }
+
+
+# ── Buffer scheduling ────────────────────────────────────────────────
+
+from buffer_scheduler import (
+    list_channels as buffer_list_channels,
+    plan_schedule as buffer_plan_schedule,
+    submit_post as buffer_submit_post,
+    PRESIGNED_URL_EXPIRY,
+)
+
+
+def _caption_for_service(clip_meta, service):
+    """Pick the right caption field from clip metadata based on Buffer's service name."""
+    s = (service or "").lower()
+    if s in ("youtube", "youtube_shorts", "googlebusiness"):
+        return clip_meta.get("video_title_for_youtube_short", "")
+    if s in ("instagram",):
+        return clip_meta.get("video_description_for_instagram", "")
+    if s in ("tiktok",):
+        return clip_meta.get("video_description_for_tiktok", "")
+    return (
+        clip_meta.get("video_description_for_instagram")
+        or clip_meta.get("video_description_for_tiktok")
+        or clip_meta.get("video_title_for_youtube_short", "")
+    )
+
+
+class ChannelTarget(BaseModel):
+    id: str
+    service: str
+
+
+class ScheduleRequest(BaseModel):
+    job_id: str
+    clip_indices: List[int]
+    episode_drop_iso: str
+    num_days: int = 7
+    channels: List[ChannelTarget]
+
+
+@app.get("/api/buffer/channels")
+async def buffer_channels_endpoint(
+    x_buffer_token: Optional[str] = Header(None, alias="X-Buffer-Token"),
+):
+    if not x_buffer_token:
+        raise HTTPException(status_code=400, detail="Missing X-Buffer-Token header")
+    try:
+        loop = asyncio.get_event_loop()
+        channels = await loop.run_in_executor(None, buffer_list_channels, x_buffer_token)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Buffer error: {e}")
+    return {"channels": channels}
+
+
+@app.post("/api/schedule")
+async def schedule_endpoint(
+    req: ScheduleRequest,
+    x_buffer_token: Optional[str] = Header(None, alias="X-Buffer-Token"),
+    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key"),
+):
+    if not x_buffer_token:
+        raise HTTPException(status_code=400, detail="Missing X-Buffer-Token header")
+    if not x_gemini_key:
+        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+    if not req.clip_indices:
+        raise HTTPException(status_code=400, detail="No clips selected")
+    if not req.channels:
+        raise HTTPException(status_code=400, detail="No channels selected")
+
+    # Backend restarts wipe the in-memory jobs dict; fall back to the on-disk output dir
+    # so previously-completed jobs can still be scheduled.
+    if req.job_id in jobs:
+        output_dir = jobs[req.job_id]["output_dir"]
+    else:
+        candidate_dir = os.path.join(OUTPUT_DIR, req.job_id)
+        if not os.path.isdir(candidate_dir):
+            raise HTTPException(status_code=404, detail="Job not found")
+        output_dir = candidate_dir
+
+    bucket = os.environ.get("AWS_S3_BUCKET")
+    if not bucket or not os.environ.get("AWS_ACCESS_KEY_ID"):
+        raise HTTPException(
+            status_code=400,
+            detail="AWS S3 not configured — Buffer scheduling needs S3 to host clip URLs.",
+        )
+
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Job metadata not found")
+
+    with open(json_files[0], "r", encoding="utf-8") as f:
+        data = json.load(f)
+    base_name = os.path.basename(json_files[0]).replace("_metadata.json", "")
+    all_clips = data.get("shorts", [])
+
+    # Ensure each selected clip is in S3 and produce a 7-day presigned URL.
+    selected = []
+    for idx in req.clip_indices:
+        if idx < 0 or idx >= len(all_clips):
+            raise HTTPException(status_code=400, detail=f"Clip index {idx} out of range")
+        clip_meta = all_clips[idx]
+        clip_filename = f"{base_name}_clip_{idx+1}.mp4"
+        local_path = os.path.join(output_dir, clip_filename)
+        s3_key = f"{req.job_id}/{clip_filename}"
+
+        if not os.path.exists(local_path):
+            raise HTTPException(status_code=404, detail=f"Clip file missing locally: {clip_filename}")
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, upload_file_to_s3, local_path, bucket, s3_key)
+
+        # If S3_PUBLIC_URL_BASE is set (e.g. an R2 public pub-<hash>.r2.dev URL),
+        # build a public URL — Buffer's HEAD reachability check needs an unsigned URL
+        # because SigV4 presigned URLs are method-scoped (GET-signed → HEAD fails 403).
+        public_base = os.environ.get("S3_PUBLIC_URL_BASE", "").rstrip("/")
+        if public_base:
+            from urllib.parse import quote
+            url = f"{public_base}/{quote(s3_key, safe='/')}"
+        else:
+            url = await loop.run_in_executor(
+                None, generate_presigned_url, bucket, s3_key, PRESIGNED_URL_EXPIRY
+            )
+            if not url:
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to generate presigned URL for clip {idx+1}"
+                )
+
+        selected.append({"index": idx, "meta": clip_meta, "url": url})
+
+    # Plan with Gemini.
+    plan_input = [
+        {
+            "index": s["index"],
+            "youtube_title": s["meta"].get("video_title_for_youtube_short", ""),
+            "tiktok_caption": s["meta"].get("video_description_for_tiktok", ""),
+            "instagram_caption": s["meta"].get("video_description_for_instagram", ""),
+            "hook": s["meta"].get("viral_hook_text", ""),
+        }
+        for s in selected
+    ]
+    try:
+        loop = asyncio.get_event_loop()
+        schedule = await loop.run_in_executor(
+            None,
+            buffer_plan_schedule,
+            plan_input,
+            req.episode_drop_iso,
+            req.num_days,
+            x_gemini_key,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Schedule planning failed: {e}")
+
+    if len(schedule) != len(selected):
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gemini returned {len(schedule)} scheduled items for {len(selected)} clips",
+        )
+
+    # Fan out to each channel × scheduled clip; leave-queued on failure (no rollback).
+    by_index = {s["index"]: s for s in selected}
+    results = []
+    for entry in schedule:
+        clip_idx = entry.get("clip_index")
+        post_at = entry.get("post_at_iso")
+        clip = by_index.get(clip_idx)
+        if not clip or not post_at:
+            results.append({"clip_index": clip_idx, "ok": False, "error": "invalid schedule entry"})
+            continue
+        for ch in req.channels:
+            text = _caption_for_service(clip["meta"], ch.service)
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                buffer_submit_post,
+                x_buffer_token,
+                ch.id,
+                text,
+                clip["url"],
+                post_at,
+                ch.service,
+                None,
+            )
+            results.append(
+                {
+                    "clip_index": clip_idx,
+                    "channel_id": ch.id,
+                    "service": ch.service,
+                    "post_at": post_at,
+                    "reasoning": entry.get("reasoning", ""),
+                    "ok": result["success"],
+                    "post_id": result.get("post_id"),
+                    "error": result.get("error"),
+                }
+            )
+
+    return {
+        "results": results,
+        "ok_count": sum(1 for r in results if r["ok"]),
+        "fail_count": sum(1 for r in results if not r["ok"]),
     }

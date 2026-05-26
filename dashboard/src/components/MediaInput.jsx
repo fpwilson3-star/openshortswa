@@ -8,6 +8,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
     const [acknowledged, setAcknowledged] = useState(false);
+    const [burnSubtitles, setBurnSubtitles] = useState(false);
 
     useEffect(() => {
         fetch(getApiUrl('/api/config'))
@@ -25,9 +26,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
         e.preventDefault();
         if (!acknowledged) return;
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true });
+            onProcess({ type: 'url', payload: url, acknowledged: true, burnSubtitles });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file, acknowledged: true });
+            onProcess({ type: 'file', payload: file, acknowledged: true, burnSubtitles });
         }
     };
 
@@ -114,6 +115,18 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 )}
 
                 <label className="flex items-start gap-2 mt-5 text-xs text-zinc-400 cursor-pointer select-none">
+                    <input
+                        type="checkbox"
+                        checked={burnSubtitles}
+                        onChange={(e) => setBurnSubtitles(e.target.checked)}
+                        className="mt-0.5 accent-primary cursor-pointer"
+                    />
+                    <span>
+                        Burn karaoke captions into each clip (word-by-word highlight).
+                    </span>
+                </label>
+
+                <label className="flex items-start gap-2 mt-3 text-xs text-zinc-400 cursor-pointer select-none">
                     <input
                         type="checkbox"
                         checked={acknowledged}

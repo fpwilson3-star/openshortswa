@@ -8,7 +8,7 @@ import ProcessingAnimation from './components/ProcessingAnimation';
 import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
 import UGCGallery from './components/UGCGallery';
-import ScheduleWeekModal from './components/ScheduleWeekModal';
+import ScheduleModal from './components/ScheduleModal';
 import { getApiUrl } from './config';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
@@ -155,6 +155,13 @@ function App() {
     return '';
   });
 
+  // Buffer access token - Load encrypted
+  const [bufferToken, setBufferToken] = useState(() => {
+    const stored = localStorage.getItem('bufferToken_v1');
+    if (stored) return decrypt(stored);
+    return '';
+  });
+
   const [uploadUserId, setUploadUserId] = useState(() => localStorage.getItem('uploadUserId') || '');
   const [userProfiles, setUserProfiles] = useState([]); // List of {username, connected: []}
   const [showKeyModal, setShowKeyModal] = useState(false);
@@ -258,6 +265,12 @@ function App() {
   }, [falKey]);
 
   useEffect(() => {
+    if (bufferToken) {
+      localStorage.setItem('bufferToken_v1', encrypt(bufferToken));
+    }
+  }, [bufferToken]);
+
+  useEffect(() => {
     if (uploadPostKey && userProfiles.length === 0) {
       fetchUserProfiles();
     }
@@ -336,11 +349,16 @@ function App() {
 
       if (data.type === 'url') {
         headers['Content-Type'] = 'application/json';
-        body = JSON.stringify({ url: data.payload, acknowledged: !!data.acknowledged });
+        body = JSON.stringify({
+          url: data.payload,
+          acknowledged: !!data.acknowledged,
+          burn_subtitles: !!data.burnSubtitles,
+        });
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
+        formData.append('burn_subtitles', data.burnSubtitles ? 'true' : 'false');
         body = formData;
       }
 
@@ -615,6 +633,57 @@ function App() {
                     <br />
                     <span className="text-zinc-600 italic">
                       Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="glass-panel p-6 mt-8">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold">Buffer Scheduling</h2>
+                  <span className="text-[10px] bg-white/5 border border-white/5 px-2 py-0.5 rounded text-zinc-500 uppercase tracking-wider">Optional</span>
+                </div>
+                <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
+                  Schedule clips across the week with AI-picked times via <strong>Buffer</strong>.
+                  Gemini orders clips around your episode drop (most on-topic first) and picks engagement-optimized post times.
+                </p>
+                <div className="space-y-4">
+                  <label className="block text-sm text-zinc-400">Buffer Access Token</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={bufferToken}
+                      onChange={(e) => setBufferToken(e.target.value)}
+                      className="input-field"
+                      placeholder="1/..."
+                    />
+                    <button
+                      onClick={() => {
+                        if (bufferToken) {
+                          localStorage.setItem('bufferToken_v1', encrypt(bufferToken));
+                          alert('Buffer token saved!');
+                        }
+                      }}
+                      className="btn-primary py-2 px-4 text-sm"
+                    >
+                      Save
+                    </button>
+                  </div>
+                  <p className="text-xs text-zinc-500 leading-relaxed">
+                    Get a personal access token from Buffer's developer settings.
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <a href="https://publish.buffer.com/account/apps" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
+                        <span className="text-zinc-400 font-medium">1. Sign In</span>
+                        <span className="text-[10px] text-zinc-600">Buffer account</span>
+                      </a>
+                      <a href="https://developers.buffer.com/guides/getting-started.html" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
+                        <span className="text-zinc-400 font-medium">2. Access Token</span>
+                        <span className="text-[10px] text-zinc-600">Generate token</span>
+                      </a>
+                    </div>
+                    <br />
+                    <span className="text-zinc-600 italic">
+                      Token stays in your browser. Sent to the backend only when scheduling, never stored server-side.
                     </span>
                   </p>
                 </div>
@@ -961,7 +1030,7 @@ function App() {
                       className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-500/20 to-indigo-500/20 hover:from-purple-500/30 hover:to-indigo-500/30 border border-purple-500/30 text-purple-300 hover:text-purple-200 rounded-full text-xs font-bold transition-all"
                     >
                       <Calendar size={14} />
-                      Programar Semana
+                      Schedule with Buffer
                     </button>
                   )}
                 </h2>
@@ -1098,13 +1167,13 @@ function App() {
         </div>
       )}
 
-      <ScheduleWeekModal
+      <ScheduleModal
         isOpen={showScheduleWeek}
         onClose={() => setShowScheduleWeek(false)}
         clips={results?.clips || []}
         jobId={jobId}
-        uploadPostKey={uploadPostKey}
-        uploadUserId={uploadUserId}
+        bufferToken={bufferToken}
+        geminiKey={apiKey}
       />
     </div>
   );

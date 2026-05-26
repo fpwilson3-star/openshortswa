@@ -18,6 +18,7 @@ import mediapipe as mp
 from google import genai
 from dotenv import load_dotenv
 import json
+from hooks import add_hook_to_video
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf')
@@ -52,15 +53,27 @@ STRICT EXCLUSIONS:
 - No generic intros/outros or purely sponsorship segments unless they contain the hook.
 - No clips < 15 s or > 60 s.
 
-OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by predicted performance (best to worst). In the descriptions, ALWAYS include a CTA like "Follow me and comment X and I'll send you the workflow" (especially if discussing an n8n workflow):
+CAPTION STYLE — value-first, never growth-hack:
+- Lead with the actual takeaway, insight, or tension from the clip. The reader should be able to "get it" without watching — counterintuitively, this drives MORE watch-through because it signals the clip is worth their time.
+- Human, conversational voice — like one curious person telling another what they just heard on a podcast.
+- NEVER write "follow me", "comment X for Y", "DM me for the workflow/guide/template", "link in bio", or any deliverable promise. These are off-brand and we can't fulfill them.
+- NEVER use "POV:", "wait til the end", emoji-spam, or other engagement-bait tropes.
+- No hashtag-spam. Hashtags are allowed ONLY on Instagram, up to 3, lowercase, genuinely relevant.
+
+PLATFORM SPECIFICS:
+- video_description_for_tiktok: 1–2 short lines. Punchy and conversational. No hashtags.
+- video_description_for_instagram: 2–3 lines. Slightly more reflective. Optional: up to 3 relevant lowercase hashtags on a final line.
+- video_title_for_youtube_short: ≤100 chars. Front-load the topic (SEO). Curiosity-led but never clickbait. No emojis.
+
+OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by predicted performance (best to worst):
 {{
   "shorts": [
     {{
       "start": <number in seconds, e.g., 12.340>,
       "end": <number in seconds, e.g., 37.900>,
-      "video_description_for_tiktok": "<description for TikTok oriented to get views>",
-      "video_description_for_instagram": "<description for Instagram oriented to get views>",
-      "video_title_for_youtube_short": "<title for YouTube Short oriented to get views 100 chars max>",
+      "video_description_for_tiktok": "<TikTok caption per style rules above>",
+      "video_description_for_instagram": "<Instagram caption per style rules above>",
+      "video_title_for_youtube_short": "<YouTube Short title per style rules above, ≤100 chars>",
       "viral_hook_text": "<SHORT punchy text overlay (max 10 words). MUST BE IN THE SAME LANGUAGE AS THE VIDEO TRANSCRIPT. Examples: 'POV: You realized...', 'Did you know?', 'Stop doing this!'>"
     }}
   ]
@@ -722,16 +735,47 @@ def process_video_to_vertical(input_video, final_output_video):
         pass
 
     print("\n   ✨ Step 6: Merging...")
+    brand_logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "wellness_actually_logo.png")
+    apply_brand = os.path.exists(brand_logo_path)
+    if apply_brand:
+        logo_w = int(OUTPUT_WIDTH * 0.18)
+        margin = max(20, int(OUTPUT_WIDTH * 0.025))
+        brand_filter = f"[2:v]scale={logo_w}:-1[logo];[0:v][logo]overlay=W-w-{margin}:H-h-{margin}[outv]"
+        print(f"   🏷️  Burning Wellness Actually brand thumbnail (logo width {logo_w}px, margin {margin}px)")
+
     if os.path.exists(temp_audio_output):
-        merge_command = [
-            'ffmpeg', '-y', '-i', temp_video_output, '-i', temp_audio_output,
-            '-c:v', 'copy', '-c:a', 'copy', final_output_video
-        ]
+        if apply_brand:
+            merge_command = [
+                'ffmpeg', '-y',
+                '-i', temp_video_output,
+                '-i', temp_audio_output,
+                '-i', brand_logo_path,
+                '-filter_complex', brand_filter,
+                '-map', '[outv]', '-map', '1:a',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+                '-c:a', 'copy', final_output_video
+            ]
+        else:
+            merge_command = [
+                'ffmpeg', '-y', '-i', temp_video_output, '-i', temp_audio_output,
+                '-c:v', 'copy', '-c:a', 'copy', final_output_video
+            ]
     else:
-         merge_command = [
-            'ffmpeg', '-y', '-i', temp_video_output,
-            '-c:v', 'copy', final_output_video
-        ]
+        if apply_brand:
+            merge_command = [
+                'ffmpeg', '-y',
+                '-i', temp_video_output,
+                '-i', brand_logo_path,
+                '-filter_complex', brand_filter.replace('[2:v]', '[1:v]'),
+                '-map', '[outv]',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+                final_output_video
+            ]
+        else:
+            merge_command = [
+                'ffmpeg', '-y', '-i', temp_video_output,
+                '-c:v', 'copy', final_output_video
+            ]
         
     try:
         subprocess.run(merge_command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -802,8 +846,7 @@ def get_viral_clips(transcript_result, video_duration):
 
     client = genai.Client(api_key=api_key)
     
-    # We use gemini-2.5-flash as requested.
-    model_name = 'gemini-2.5-flash' 
+    model_name = 'gemini-3-flash-preview'
     
     print(f"🤖  Initializing Gemini with model: {model_name}")
 
@@ -833,12 +876,11 @@ def get_viral_clips(transcript_result, video_duration):
         try:
             usage = response.usage_metadata
             if usage:
-                # Gemini 2.5 Flash Pricing (Dec 2025)
-                # Input: $0.10 per 1M tokens
-                # Output: $0.40 per 1M tokens
-                
-                input_price_per_million = 0.10
-                output_price_per_million = 0.40
+                # Gemini 3 Flash Preview Pricing (May 2026)
+                # Input: $0.50 per 1M tokens
+                # Output: $3.00 per 1M tokens
+                input_price_per_million = 0.50
+                output_price_per_million = 3.00
                 
                 prompt_tokens = usage.prompt_token_count
                 output_tokens = usage.candidates_token_count
@@ -883,6 +925,46 @@ def get_viral_clips(transcript_result, video_duration):
         print(f"❌ Gemini Error: {e}")
         return None
 
+def append_outro(video_path, outro_image_path, output_path, duration=1.0, xfade=0.3):
+    """
+    Append a static branded outro frame at the end of the video with a crossfade
+    transition. Audio crossfades to silence over the same window. Output matches
+    the input clip's resolution; output framerate is normalized to 30 so xfade
+    has matching streams.
+    """
+    probe = ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream=width,height', '-of', 'csv=p=0', video_path]
+    width, height = [int(x) for x in subprocess.check_output(probe).decode().strip().split(',')]
+
+    dur_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+               '-of', 'csv=p=0', video_path]
+    clip_duration = float(subprocess.check_output(dur_cmd).decode().strip())
+    fade_offset = max(0.0, clip_duration - xfade)
+
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', video_path,
+        '-loop', '1', '-t', str(duration), '-i', outro_image_path,
+        '-f', 'lavfi', '-t', str(duration), '-i', 'anullsrc=cl=stereo:r=44100',
+        '-filter_complex',
+        f'[0:v]fps=30,format=yuv420p[clip_v];'
+        f'[1:v]scale={width}:{height}:force_original_aspect_ratio=decrease,'
+        f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,'
+        f'setsar=1,format=yuv420p,fps=30[outro_v];'
+        f'[clip_v][outro_v]xfade=transition=fade:duration={xfade}:offset={fade_offset}[v];'
+        f'[0:a][2:a]acrossfade=duration={xfade}[a]',
+        '-map', '[v]', '-map', '[a]',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:a', 'aac',
+        output_path,
+    ]
+    print(f"   🎬 Appending outro card (xfade {xfade}s @ {fade_offset:.2f}s)")
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg outro append failed: {result.stderr.decode()[:500]}")
+    return True
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="AutoCrop-Vertical with Viral Clip Detection.")
     
@@ -893,6 +975,7 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output', type=str, help="Output directory or file (if processing whole video).")
     parser.add_argument('--keep-original', action='store_true', help="Keep the downloaded YouTube video.")
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
+    parser.add_argument('--burn-subtitles', action='store_true', help="Burn subtitles into each clip using default styling.")
     
     args = parser.parse_args()
 
@@ -1000,10 +1083,55 @@ if __name__ == '__main__':
                 
                 # Process vertical
                 success = process_video_to_vertical(clip_temp_path, clip_final_path)
-                
+
                 if success:
                     print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
-                
+
+                    hook_text = (clip.get('viral_hook_text') or '').strip()
+                    if hook_text:
+                        hooked_path = os.path.join(output_dir, f"hooked_{clip_filename}")
+                        try:
+                            add_hook_to_video(clip_final_path, hook_text, hooked_path, position="top", font_scale=1.0, duration=5)
+                            os.replace(hooked_path, clip_final_path)
+                            print(f"   🎯 Auto-hook applied (first 5s): '{hook_text}'")
+                        except Exception as e:
+                            print(f"   ⚠️ Auto-hook failed for clip {i+1}: {e}")
+                            if os.path.exists(hooked_path):
+                                os.remove(hooked_path)
+
+                    if args.burn_subtitles:
+                        from subtitles import generate_karaoke_ass, burn_karaoke_subtitles, ensure_caption_font
+                        ensure_caption_font()
+                        ass_path = os.path.join(output_dir, f"temp_{clip_filename}.ass")
+                        subbed_path = os.path.join(output_dir, f"subbed_{clip_filename}")
+                        try:
+                            if generate_karaoke_ass(transcript, start, end, ass_path):
+                                burn_karaoke_subtitles(clip_final_path, ass_path, subbed_path)
+                                os.replace(subbed_path, clip_final_path)
+                                print(f"   💬 Karaoke captions burned in for clip {i+1}")
+                            else:
+                                print(f"   ⚠️ No words found in clip {i+1} range; skipping captions")
+                        except Exception as e:
+                            print(f"   ⚠️ Caption burn failed for clip {i+1}: {e}")
+                            if os.path.exists(subbed_path):
+                                os.remove(subbed_path)
+                        finally:
+                            if os.path.exists(ass_path):
+                                os.remove(ass_path)
+
+                    # Outro end card (always-on if the asset exists)
+                    outro_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                              "assets", "wellness_actually_outro.png")
+                    if os.path.exists(outro_path):
+                        outro_out = os.path.join(output_dir, f"outroed_{clip_filename}")
+                        try:
+                            append_outro(clip_final_path, outro_path, outro_out)
+                            os.replace(outro_out, clip_final_path)
+                        except Exception as e:
+                            print(f"   ⚠️ Outro append failed for clip {i+1}: {e}")
+                            if os.path.exists(outro_out):
+                                os.remove(outro_out)
+
                 # Clean up temp cut
                 if os.path.exists(clip_temp_path):
                     os.remove(clip_temp_path)
