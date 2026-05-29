@@ -2272,20 +2272,36 @@ from buffer_scheduler import (
 )
 
 
+DEFAULT_MENTIONS = ("@wellnessactuallypod", "@profemilyoster")
+
+
+def _append_mentions(text):
+    """Append the default @mentions, skipping any already present in the caption."""
+    base = (text or "").rstrip()
+    lower = base.lower()
+    missing = [m for m in DEFAULT_MENTIONS if m.lower() not in lower]
+    if not missing:
+        return base
+    sep = "\n\n" if base else ""
+    return f"{base}{sep}{' '.join(missing)}"
+
+
 def _caption_for_service(clip_meta, service):
     """Pick the right caption field from clip metadata based on Buffer's service name."""
     s = (service or "").lower()
     if s in ("youtube", "youtube_shorts", "googlebusiness"):
         return clip_meta.get("video_title_for_youtube_short", "")
     if s in ("instagram",):
-        return clip_meta.get("video_description_for_instagram", "")
-    if s in ("tiktok",):
-        return clip_meta.get("video_description_for_tiktok", "")
-    return (
-        clip_meta.get("video_description_for_instagram")
-        or clip_meta.get("video_description_for_tiktok")
-        or clip_meta.get("video_title_for_youtube_short", "")
-    )
+        text = clip_meta.get("video_description_for_instagram", "")
+    elif s in ("tiktok",):
+        text = clip_meta.get("video_description_for_tiktok", "")
+    else:
+        text = (
+            clip_meta.get("video_description_for_instagram")
+            or clip_meta.get("video_description_for_tiktok")
+            or clip_meta.get("video_title_for_youtube_short", "")
+        )
+    return _append_mentions(text)
 
 
 class ChannelTarget(BaseModel):
