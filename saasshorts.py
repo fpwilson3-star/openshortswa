@@ -37,7 +37,7 @@ DEFAULT_VOICES = {
 }
 
 
-GEMINI_MODEL = "gemini-3-flash-preview"
+from gemini_utils import gemini_generate_with_fallback
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -100,13 +100,16 @@ Return a comprehensive JSON research report:
 
 Be thorough. Use REAL data from your search results, not made-up information."""
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[prompt],
+    response, _ = gemini_generate_with_fallback(
+        client,
+        [prompt],
         config=types.GenerateContentConfig(
             tools=[types.Tool(google_search=types.GoogleSearch())],
         ),
     )
+    if response is None:
+        print("[SaaSShorts] ⚠️ Gemini failed across all fallback models for web research")
+        return {"raw_research": "", "product_name": domain, "grounding_sources": []}
 
     # Extract grounding sources
     sources = []
@@ -332,11 +335,13 @@ Return a JSON object:
 IMPORTANT: Use REAL pain points from user reviews when available. Real frustrations make the best UGC content.
 Include 5-8 pain points, 4-6 emotional hooks, and 4+ viral angles."""
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[prompt],
+    response, _ = gemini_generate_with_fallback(
+        client,
+        [prompt],
         config=types.GenerateContentConfig(response_mime_type="application/json"),
     )
+    if response is None:
+        raise Exception("Gemini failed across all fallback models for SaaS analysis")
 
     raw = response.text
     if not raw:
@@ -514,14 +519,16 @@ RULES:
 - Example female: "a 26 year old attractive european woman, light brown wavy hair, wearing a white tank top, natural minimal makeup, friendly face"
 - Example male: "a 29 year old european man, short dark hair, light stubble, wearing a navy t-shirt, smart casual look" """
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[prompt],
+    response, _ = gemini_generate_with_fallback(
+        client,
+        [prompt],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
             max_output_tokens=8192,
         ),
     )
+    if response is None:
+        raise Exception("Gemini failed across all fallback models for script generation")
 
     raw = response.text
     if not raw:

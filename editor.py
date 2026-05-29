@@ -5,11 +5,11 @@ import subprocess
 import time
 from google import genai
 from google.genai import types
+from gemini_utils import gemini_generate_with_fallback
 
 class VideoEditor:
     def __init__(self, api_key):
         self.client = genai.Client(api_key=api_key)
-        self.model_name = "gemini-3-flash-preview" 
 
     def upload_video(self, video_path):
         """Uploads video to Gemini File API."""
@@ -112,14 +112,16 @@ class VideoEditor:
         """
 
         print("🤖 Asking Gemini for FFmpeg filter...")
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=[video_file_obj, prompt],
+        response, _ = gemini_generate_with_fallback(
+            self.client,
+            [video_file_obj, prompt],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json"
             )
         )
-        
+        if response is None:
+            return None
+
         print(f"🔍 DEBUG: Gemini Raw Response:\n{response.text}")
 
         try:
@@ -208,13 +210,15 @@ class VideoEditor:
         """
 
         print("🤖 Asking Gemini for Remotion effects config...")
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=[video_file_obj, prompt],
+        response, _ = gemini_generate_with_fallback(
+            self.client,
+            [video_file_obj, prompt],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json"
             )
         )
+        if response is None:
+            return None
 
         print(f"🔍 DEBUG: Gemini Raw Response:\n{response.text}")
 

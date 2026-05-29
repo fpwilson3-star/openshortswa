@@ -19,6 +19,7 @@ from google import genai
 from dotenv import load_dotenv
 import json
 from hooks import add_hook_to_video
+from gemini_utils import GEMINI_MODELS, gemini_generate_with_fallback
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf')
@@ -845,10 +846,8 @@ def get_viral_clips(transcript_result, video_duration):
 
 
     client = genai.Client(api_key=api_key)
-    
-    model_name = 'gemini-3-flash-preview'
-    
-    print(f"🤖  Initializing Gemini with model: {model_name}")
+
+    print(f"🤖  Initializing Gemini (preferred: {GEMINI_MODELS[0]})")
 
     # Extract words
     words = []
@@ -866,12 +865,15 @@ def get_viral_clips(transcript_result, video_duration):
         words_json=json.dumps(words)
     )
 
+    # Retry transient failures (503 overload, 429 rate limit, timeouts) with
+    # exponential backoff, and fall back to an alternate model if the preferred
+    # one is unavailable. A hard failure returns None so the caller can fail the
+    # job cleanly instead of silently converting the whole video.
+    response, model_name = gemini_generate_with_fallback(client, prompt)
+    if response is None:
+        return None
+
     try:
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt
-        )
-        
         # --- Cost Calculation ---
         try:
             usage = response.usage_metadata
@@ -1041,9 +1043,17 @@ if __name__ == '__main__':
 
         # 4. Gemini Analysis
         clips_data = get_viral_clips(transcript, duration)
-        
-        if not clips_data or 'shorts' not in clips_data:
-            print("❌ Failed to identify clips. Converting whole video as fallback.")
+
+        if clips_data is None:
+            # Gemini call failed (e.g. transient 503 after retries, or a hard
+            # error). Do NOT silently reframe the entire video — that can be an
+            # hour-long job the user never asked for. Fail cleanly so the job is
+            # marked failed and can be retried. Use --skip-analysis to
+            # intentionally convert a whole video.
+            print("❌ Gemini analysis failed. Aborting (re-run to retry, or use --skip-analysis to convert the whole video).")
+            sys.exit(1)
+        elif 'shorts' not in clips_data or not clips_data['shorts']:
+            print("⚠️ Gemini found no viral clips. Converting whole video as fallback.")
             output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
             process_video_to_vertical(input_video, output_file)
         else:

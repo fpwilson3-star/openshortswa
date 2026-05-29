@@ -10,10 +10,10 @@ import json
 import httpx
 from google import genai
 from google.genai import types
+from gemini_utils import gemini_generate_with_fallback
 
 
 BUFFER_API_URL = "https://api.buffer.com"
-GEMINI_MODEL = "gemini-3-flash-preview"
 PRESIGNED_URL_EXPIRY = 604800  # 7 days, SigV4 max
 
 
@@ -65,11 +65,13 @@ def plan_schedule(clips, episode_drop_iso, num_days, gemini_api_key):
         clips_json=json.dumps(clips, indent=2, ensure_ascii=False),
     )
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[prompt],
+    response, _ = gemini_generate_with_fallback(
+        client,
+        [prompt],
         config=types.GenerateContentConfig(response_mime_type="application/json"),
     )
+    if response is None:
+        raise RuntimeError("Gemini failed to plan schedule across all fallback models")
 
     text = response.text.strip()
     if text.startswith("```json"):
