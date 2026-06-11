@@ -78,7 +78,7 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
       "video_description_for_tiktok": "<TikTok caption per style rules above>",
       "video_description_for_instagram": "<Instagram caption per style rules above>",
       "video_title_for_youtube_short": "<YouTube Short title per style rules above, ≤100 chars>",
-      "viral_hook_text": "<SHORT punchy text overlay (max 10 words). MUST BE IN THE SAME LANGUAGE AS THE VIDEO TRANSCRIPT. Follow the same value-first style as the captions: a specific, curiosity-led claim — never engagement bait. Examples: 'The supplement myth your doctor still believes', 'Why this common lab test is wasted money', 'The real reason diets fail'>"
+      "viral_hook_text": "<SHORT punchy text overlay (max 10 words). MUST BE IN THE SAME LANGUAGE AS THE VIDEO TRANSCRIPT. Follow the same value-first style as the captions: a specific, curiosity-led claim — never engagement bait. Wrap the ONE most important word (or 2-word phrase) in *asterisks* — it gets rendered in a highlight color. Examples: 'The supplement *myth* your doctor still believes', 'Why this common lab test is *wasted money*', 'The *real* reason diets fail'>"
     }}
   ]
 }}

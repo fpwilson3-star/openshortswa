@@ -34,6 +34,7 @@ output/
 *_check.png
 branded_frame.png
 compose-build.log
+st.json
 
 # Cache dirs
 .cache/

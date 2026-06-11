@@ -28,100 +28,118 @@ def _strip_emojis(text):
     return _EMOJI_RE.sub("", text or "").strip()
 
 FONT_DIR = "fonts"
-FONT_PATH = os.path.join(FONT_DIR, "Coolvetica.ttf")
+FONT_PATH = os.path.join(FONT_DIR, "Anton.ttf")
+FALLBACK_FONT_PATH = os.path.join(FONT_DIR, "Coolvetica.ttf")
+
+# Matches the karaoke caption highlight (#FFEE00) so each clip has one accent color.
+HIGHLIGHT_COLOR = (255, 238, 0, 255)
+TEXT_COLOR = (255, 255, 255, 255)
+
+_EMPHASIS_RE = re.compile(r"\*([^*]+)\*")
+
+def _parse_emphasis(text):
+    """
+    Splits text into (word, highlighted) tokens. Words wrapped in *asterisks*
+    are flagged for highlight rendering; stray asterisks are stripped.
+    """
+    tokens = []
+    pos = 0
+    for m in _EMPHASIS_RE.finditer(text):
+        for w in text[pos:m.start()].split():
+            tokens.append((w, False))
+        for w in m.group(1).split():
+            tokens.append((w, True))
+        pos = m.end()
+    for w in text[pos:].split():
+        tokens.append((w, False))
+    return [(w.replace('*', ''), hl) for w, hl in tokens if w.replace('*', '')]
 
 def download_font_if_needed():
-    """Hook font is a licensed local font — bundled in fonts/, not auto-downloaded."""
+    """Hook font is bundled in fonts/, not auto-downloaded."""
     if not os.path.exists(FONT_PATH):
-        print(f"⚠️  Hook font missing at {FONT_PATH} — falling back to PIL default")
+        print(f"⚠️  Hook font missing at {FONT_PATH} — falling back to {FALLBACK_FONT_PATH}")
     return os.path.exists(FONT_PATH)
 
 def create_hook_image(text, target_width, output_image_path="hook_overlay.png", font_scale=1.0):
     """
-    Generates a white rounded box with bold sans-serif text, vertically and
-    horizontally centered using font.getmetrics() for consistent line heights.
-    target_width: max width the box should occupy (e.g. 85% of video).
+    Renders all-caps stroke text directly (no background card): white Anton
+    with a thick black outline and a soft drop shadow, *emphasized* words in
+    highlight yellow. target_width: max width the text may occupy.
     """
     download_font_if_needed()
 
-    padding_x = 36
-    padding_y = 30
-    cornerradius = 20
-    shadow_offset = (5, 5)
-
-    # Inter Bold is a bit denser than Noto Serif Bold — slightly smaller ratio.
-    base_font_size = int(target_width * 0.046)
+    # ~80px at 1080-wide video — reads ~1.4x the karaoke captions (Anton runs tall).
+    base_font_size = int(target_width * 0.082)
     font_size = int(base_font_size * font_scale)
+    stroke_width = max(3, round(font_size * 0.085))
+    # Margin must clear the stroke plus the blurred shadow on every side.
+    margin = stroke_width + 14
+    shadow_offset = (0, int(font_size * 0.07))
 
-    try:
-        font = ImageFont.truetype(FONT_PATH, font_size)
-    except Exception as e:
-        print(f"⚠️ Could not load font {FONT_PATH}, using default. Error: {e}")
+    font = None
+    for path in (FONT_PATH, FALLBACK_FONT_PATH):
+        try:
+            font = ImageFont.truetype(path, font_size)
+            break
+        except Exception as e:
+            print(f"⚠️ Could not load font {path}: {e}")
+    if font is None:
         font = ImageFont.load_default()
 
     ascent, descent = font.getmetrics()
     visual_line_height = ascent + descent
-    extra_line_gap = int(visual_line_height * 0.15)
+    extra_line_gap = int(visual_line_height * 0.08)
     line_advance = visual_line_height + extra_line_gap
 
-    # Text wrap (pixel-based using font.getlength for speed)
-    max_text_width = target_width - (2 * padding_x)
-    paragraphs = (text or "").split('\n')
+    tokens = _parse_emphasis(text or "")
+    tokens = [(w.upper(), hl) for w, hl in tokens]
+
+    # Pixel-based wrap into lines of tokens.
+    max_text_width = target_width - (2 * margin)
     lines = []
-    for p in paragraphs:
-        if not p.strip():
-            lines.append("")
-            continue
-        words = p.split()
-        current = []
-        for word in words:
-            candidate = ' '.join(current + [word])
-            if font.getlength(candidate) <= max_text_width:
-                current.append(word)
-            else:
-                if current:
-                    lines.append(' '.join(current))
-                    current = [word]
-                else:
-                    lines.append(word)
-                    current = []
-        if current:
-            lines.append(' '.join(current))
-
+    current = []
+    for token in tokens:
+        candidate = ' '.join([t[0] for t in current] + [token[0]])
+        if font.getlength(candidate) <= max_text_width or not current:
+            current.append(token)
+        else:
+            lines.append(current)
+            current = [token]
+    if current:
+        lines.append(current)
     if not lines:
-        lines = [""]
+        lines = [[]]
 
-    max_line_width = max((font.getlength(l) for l in lines), default=0)
-    box_width = max(int(max_line_width) + (2 * padding_x), int(target_width * 0.3))
+    space_w = font.getlength(' ')
+    line_widths = [font.getlength(' '.join(t[0] for t in line)) for line in lines]
+    max_line_width = int(max(line_widths, default=0))
 
+    canvas_w = max_line_width + (2 * margin)
     total_text_height = len(lines) * visual_line_height + max(0, len(lines) - 1) * extra_line_gap
-    box_height = total_text_height + (2 * padding_y)
+    canvas_h = total_text_height + (2 * margin)
 
-    canvas_w = box_width + 40
-    canvas_h = box_height + 40
+    def draw_text_layer(draw, dx, dy, fill, stroke_fill, highlight_fill):
+        baseline_y = margin + ascent + dy
+        for line, line_w in zip(lines, line_widths):
+            x = (canvas_w - int(line_w)) // 2 + dx
+            for word, highlighted in line:
+                draw.text(
+                    (x, baseline_y), word, font=font, anchor="ls",
+                    fill=highlight_fill if highlighted else fill,
+                    stroke_width=stroke_width, stroke_fill=stroke_fill,
+                )
+                x += font.getlength(word) + space_w
+            baseline_y += line_advance
+
+    # Soft drop shadow: blurred black copy of the text, offset downward.
+    shadow = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
+    draw_text_layer(ImageDraw.Draw(shadow), shadow_offset[0], shadow_offset[1],
+                    (0, 0, 0, 170), (0, 0, 0, 170), (0, 0, 0, 170))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(6))
 
     img = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-
-    shadow_box = [
-        (20 + shadow_offset[0], 20 + shadow_offset[1]),
-        (20 + box_width + shadow_offset[0], 20 + box_height + shadow_offset[1]),
-    ]
-    draw.rounded_rectangle(shadow_box, radius=cornerradius, fill=(0, 0, 0, 100))
-    img = img.filter(ImageFilter.GaussianBlur(5))
-
-    draw_final = ImageDraw.Draw(img)
-    main_box = [(20, 20), (20 + box_width, 20 + box_height)]
-    draw_final.rounded_rectangle(main_box, radius=cornerradius, fill=(255, 255, 255, 240))
-
-    # Draw lines positioned by baseline — consistent vertical rhythm regardless of glyph content.
-    baseline_y = 20 + padding_y + ascent
-    for line in lines:
-        if line:
-            line_w = font.getlength(line)
-            x = 20 + (box_width - int(line_w)) // 2
-            draw_final.text((x, baseline_y), line, font=font, fill="black", anchor="ls")
-        baseline_y += line_advance
+    img = Image.alpha_composite(img, shadow)
+    draw_text_layer(ImageDraw.Draw(img), 0, 0, TEXT_COLOR, (0, 0, 0, 255), HIGHLIGHT_COLOR)
 
     img.save(output_image_path)
     return output_image_path, canvas_w, canvas_h
