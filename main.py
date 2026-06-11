@@ -33,6 +33,9 @@ ASPECT_RATIO = 9 / 16
 GEMINI_PROMPT_TEMPLATE = """
 You are a senior short-form video editor. Read the ENTIRE transcript and word-level timestamps to choose the 3–15 MOST VIRAL moments for TikTok/IG Reels/YouTube Shorts. Each clip must be between 15 and 60 seconds long.
 
+SHOW CONTEXT:
+This is "Wellness Actually", a health and medicine podcast hosted by a physician. The best moments are counterintuitive-but-credible: myth-busting, surprising evidence, practical health takeaways, and candid moments that humanize medicine. Captions and hooks must sound evidence-minded and credible — never alarmist, never pseudo-scientific.
+
 ⚠️ FFMPEG TIME CONTRACT — STRICT REQUIREMENTS:
 - Return timestamps in ABSOLUTE SECONDS from the start of the video (usable in: ffmpeg -ss <start> -to <end> -i <input> ...).
 - Only NUMBERS with decimal point, up to 3 decimals (examples: 0, 1.250, 17.350).
@@ -75,7 +78,7 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
       "video_description_for_tiktok": "<TikTok caption per style rules above>",
       "video_description_for_instagram": "<Instagram caption per style rules above>",
       "video_title_for_youtube_short": "<YouTube Short title per style rules above, ≤100 chars>",
-      "viral_hook_text": "<SHORT punchy text overlay (max 10 words). MUST BE IN THE SAME LANGUAGE AS THE VIDEO TRANSCRIPT. Examples: 'POV: You realized...', 'Did you know?', 'Stop doing this!'>"
+      "viral_hook_text": "<SHORT punchy text overlay (max 10 words). MUST BE IN THE SAME LANGUAGE AS THE VIDEO TRANSCRIPT. Follow the same value-first style as the captions: a specific, curiosity-led claim — never engagement bait. Examples: 'The supplement myth your doctor still believes', 'Why this common lab test is wasted money', 'The real reason diets fail'>"
     }}
   ]
 }}
@@ -606,6 +609,38 @@ def process_video_to_vertical(input_video, final_output_video):
     if os.path.exists(final_output_video): os.remove(final_output_video)
 
     print(f"🎬 Processing clip: {input_video}")
+
+    original_width, original_height = get_video_resolution(input_video)
+
+    # Fast path: input is already 9:16 (or narrower) — no reframing needed.
+    # Burn the brand logo in a single encode pass (or stream-copy if there is
+    # no logo) instead of scene detection + face tracking + two re-encodes.
+    # CRF 18 here because hook/subtitle/outro passes may re-encode afterwards.
+    if original_width / original_height <= ASPECT_RATIO + 0.01:
+        print("   ⚡ Input is already vertical — skipping reframing.")
+        brand_logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "wellness_actually_logo.png")
+        if os.path.exists(brand_logo_path):
+            logo_w = int(original_width * 0.18)
+            margin = max(20, int(original_width * 0.025))
+            print(f"   🏷️  Burning Wellness Actually brand thumbnail (logo width {logo_w}px, margin {margin}px)")
+            command = [
+                'ffmpeg', '-y', '-i', input_video, '-i', brand_logo_path,
+                '-filter_complex',
+                f"[1:v]scale={logo_w}:-1[logo];[0:v][logo]overlay=W-w-{margin}:H-h-{margin}[outv]",
+                '-map', '[outv]', '-map', '0:a?',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+                '-c:a', 'copy', final_output_video
+            ]
+        else:
+            command = ['ffmpeg', '-y', '-i', input_video, '-c', 'copy', final_output_video]
+        result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            print("\n   ❌ Vertical fast-path encode failed.")
+            print("   Stderr:", result.stderr.decode()[:500])
+            return False
+        print(f"   ✅ Clip saved to {final_output_video} ({time.time() - script_start_time:.1f}s)")
+        return True
+
     print("   Step 1: Detecting scenes...")
     scenes, fps = detect_scenes(input_video)
     
@@ -621,8 +656,6 @@ def process_video_to_vertical(input_video, final_output_video):
     print(f"   ✅ Found {len(scenes)} scenes.")
 
     print("\n   🧠 Step 2: Preparing Active Tracking...")
-    original_width, original_height = get_video_resolution(input_video)
-    
     OUTPUT_HEIGHT = original_height
     OUTPUT_WIDTH = int(OUTPUT_HEIGHT * ASPECT_RATIO)
     if OUTPUT_WIDTH % 2 != 0:
@@ -796,9 +829,10 @@ def transcribe_video(video_path):
     print("🎙️  Transcribing video with Faster-Whisper (CPU Optimized)...")
     from faster_whisper import WhisperModel
     
-    # Run on CPU with INT8 quantization for speed
-    model = WhisperModel("base", device="cpu", compute_type="int8")
-    
+    # Run on CPU with INT8 quantization for speed. "small" is noticeably more
+    # accurate than "base" on domain jargon (captions get burned in publicly).
+    model = WhisperModel(os.getenv("WHISPER_MODEL", "small"), device="cpu", compute_type="int8")
+
     segments, info = model.transcribe(video_path, word_timestamps=True)
     
     print(f"   Detected language '{info.language}' with probability {info.language_probability:.2f}")

@@ -86,6 +86,7 @@ Async job queue with semaphore-based concurrency control. Configure via `MAX_CON
 **Server-side (.env):**
 - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_BUCKET` - For S3 backup
 - `MAX_CONCURRENT_JOBS` - Concurrent processing limit (default: 5)
+- `WHISPER_MODEL` - faster-whisper model size for transcription (default: `small`)
 - `VITE_API_URL` - Production API URL override
 
 **Client-side (localStorage, encrypted):**
