@@ -977,11 +977,17 @@ def append_outro(video_path, outro_image_path, output_path, duration=1.0, xfade=
     clip_duration = float(subprocess.check_output(dur_cmd).decode().strip())
     fade_offset = max(0.0, clip_duration - xfade)
 
+    # Generate the outro silence at the clip's own sample rate — a mismatch
+    # makes acrossfade silently resample the whole clip (audible HF loss).
+    sr_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a:0',
+              '-show_entries', 'stream=sample_rate', '-of', 'csv=p=0', video_path]
+    sample_rate = int(subprocess.check_output(sr_cmd).decode().strip() or 48000)
+
     cmd = [
         'ffmpeg', '-y',
         '-i', video_path,
         '-loop', '1', '-t', str(duration), '-i', outro_image_path,
-        '-f', 'lavfi', '-t', str(duration), '-i', 'anullsrc=cl=stereo:r=44100',
+        '-f', 'lavfi', '-t', str(duration), '-i', f'anullsrc=cl=stereo:r={sample_rate}',
         '-filter_complex',
         f'[0:v]fps=30,format=yuv420p[clip_v];'
         f'[1:v]scale={width}:{height}:force_original_aspect_ratio=decrease,'
@@ -991,7 +997,7 @@ def append_outro(video_path, outro_image_path, output_path, duration=1.0, xfade=
         f'[0:a][2:a]acrossfade=duration={xfade}[a]',
         '-map', '[v]', '-map', '[a]',
         '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-        '-c:a', 'aac',
+        '-c:a', 'aac', '-b:a', '192k', '-ar', str(sample_rate),
         output_path,
     ]
     print(f"   🎬 Appending outro card (xfade {xfade}s @ {fade_offset:.2f}s)")
@@ -1120,7 +1126,9 @@ if __name__ == '__main__':
                     '-to', str(end), 
                     '-i', input_video,
                     '-c:v', 'libx264', '-crf', '18', '-preset', 'fast',
-                    '-c:a', 'aac',
+                    # 256k: this is generation 1 of 2 lossy AAC encodes (outro
+                    # append re-encodes again), so leave plenty of headroom.
+                    '-c:a', 'aac', '-b:a', '256k',
                     clip_temp_path
                 ]
                 subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
