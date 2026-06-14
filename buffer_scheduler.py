@@ -115,20 +115,23 @@ def list_channels(buffer_token):
     return body.get("data", {}).get("account", {}).get("channels", [])
 
 
-def _build_metadata_literal(service, text):
+def _build_metadata_literal(service, text, title=None):
     """Return the per-platform `metadata` block required by Buffer, or None if not needed."""
     s = (service or "").lower()
     if s == "instagram":
         return "{ instagram: { type: reel, shouldShareToFeed: true } }"
     if s in ("youtube", "youtube_shorts"):
         # YouTube requires both title and categoryId. "22" = People & Blogs.
-        title_literal = json.dumps(text or "Short")
+        # `text` is the post body (becomes the YouTube description); `title` is the
+        # video title. They differ for YouTube, so prefer an explicit title and only
+        # fall back to text when one isn't supplied.
+        title_literal = json.dumps(title or text or "Short")
         return f'{{ youtube: {{ title: {title_literal}, categoryId: "22" }} }}'
     # tiktok and others: no required metadata so far.
     return None
 
 
-def _build_create_post_mutation(text, channel_id, due_at_iso, video_url, service, thumbnail_url=None):
+def _build_create_post_mutation(text, channel_id, due_at_iso, video_url, service, thumbnail_url=None, title=None):
     """
     Build the createPost mutation with everything inlined as GraphQL literals.
     GraphQL server infers types from the input shape, so we don't need to know
@@ -148,7 +151,7 @@ def _build_create_post_mutation(text, channel_id, due_at_iso, video_url, service
         f"assets: [{{ video: {video_literal} }}]",
     ]
 
-    metadata = _build_metadata_literal(service, text)
+    metadata = _build_metadata_literal(service, text, title)
     if metadata:
         input_fields.append(f"metadata: {metadata}")
 
@@ -173,12 +176,16 @@ def _build_create_post_mutation(text, channel_id, due_at_iso, video_url, service
     )
 
 
-def submit_post(buffer_token, channel_id, text, video_url, due_at_iso, service, thumbnail_url=None):
+def submit_post(buffer_token, channel_id, text, video_url, due_at_iso, service, thumbnail_url=None, title=None):
     """
     Submit one scheduled post to Buffer (one channel per call).
+
+    `text` is the post body (the YouTube description / IG-TikTok caption). `title`
+    is used only for services that need a separate video title (YouTube); when
+    omitted it falls back to `text`.
     Returns {success: bool, post_id?, due_at?, error?}.
     """
-    mutation = _build_create_post_mutation(text, channel_id, due_at_iso, video_url, service, thumbnail_url)
+    mutation = _build_create_post_mutation(text, channel_id, due_at_iso, video_url, service, thumbnail_url, title)
 
     headers = {
         "Authorization": f"Bearer {buffer_token}",

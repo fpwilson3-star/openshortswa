@@ -63,11 +63,13 @@ CAPTION STYLE — value-first, never growth-hack:
 - NEVER write "follow me", "comment X for Y", "DM me for the workflow/guide/template", "link in bio", or any deliverable promise. These are off-brand and we can't fulfill them.
 - NEVER use "POV:", "wait til the end", emoji-spam, or other engagement-bait tropes.
 - No hashtag-spam. Hashtags are allowed ONLY on Instagram, up to 3, lowercase, genuinely relevant.
+- Hashtags must be NICHE and SPECIFIC to THIS clip's actual topic, claim, or named entities — not broad catch-alls. The goal is to land in smaller, targeted communities where the post can surface, not get buried in mega-tags. Derive them from the specific subject matter (a condition, study, food, method, person, sub-topic) discussed in the clip. AVOID generic tags like #health, #wellness, #podcast, #science, #tips. PREFER specific ones like #perimenopause, #sleeptraining, #seedoils, #cortisol, #vo2max. If nothing specific genuinely fits, return fewer hashtags (or none) rather than padding with generic ones.
 
 PLATFORM SPECIFICS:
 - video_description_for_tiktok: 1–2 short lines. Punchy and conversational. No hashtags.
-- video_description_for_instagram: 2–3 lines. Slightly more reflective. Optional: up to 3 relevant lowercase hashtags on a final line.
-- video_title_for_youtube_short: ≤100 chars. Front-load the topic (SEO). Curiosity-led but never clickbait. No emojis.
+- video_description_for_instagram: 2–3 lines. Slightly more reflective. Optional: up to 3 niche, clip-specific lowercase hashtags on a final line (see hashtag rule above — specific over generic, fewer is fine).
+- video_title_for_youtube_short: ≤100 chars. Front-load the topic (SEO). Curiosity-led but never clickbait. No emojis. No hashtags (they belong in the description).
+- video_description_for_youtube_short: 2–4 lines written for YouTube SEO. Open with a sentence or two that naturally restates the clip's topic and the key terms someone would search for (YouTube indexes this text). Conversational, value-first, same voice as the other captions. End with a final line of 3–5 lowercase hashtags: niche and clip-specific per the hashtag rule above, but here you may lean slightly more toward searchable terms a viewer would actually type. #shorts is acceptable as one of them for categorization.
 
 OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by predicted performance (best to worst):
 {{
@@ -78,6 +80,7 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
       "video_description_for_tiktok": "<TikTok caption per style rules above>",
       "video_description_for_instagram": "<Instagram caption per style rules above>",
       "video_title_for_youtube_short": "<YouTube Short title per style rules above, ≤100 chars>",
+      "video_description_for_youtube_short": "<YouTube Short description per style rules above, SEO-led with 3–5 niche/searchable hashtags on a final line>",
       "viral_hook_text": "<SHORT punchy text overlay (max 10 words). MUST BE IN THE SAME LANGUAGE AS THE VIDEO TRANSCRIPT. Follow the same value-first style as the captions: a specific, curiosity-led claim — never engagement bait. Wrap the ONE most important word (or 2-word phrase) in *asterisks* — it gets rendered in a highlight color. Examples: 'The supplement *myth* your doctor still believes', 'Why this common lab test is *wasted money*', 'The *real* reason diets fail'>"
     }}
   ]

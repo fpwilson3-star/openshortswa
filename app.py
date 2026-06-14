@@ -2287,9 +2287,19 @@ def _append_mentions(text):
 
 
 def _caption_for_service(clip_meta, service):
-    """Pick the right caption field from clip metadata based on Buffer's service name."""
+    """Pick the right caption field from clip metadata based on Buffer's service name.
+
+    For YouTube this returns the post BODY (which becomes the video description) —
+    the title is supplied separately via _title_for_service.
+    """
     s = (service or "").lower()
-    if s in ("youtube", "youtube_shorts", "googlebusiness"):
+    if s in ("youtube", "youtube_shorts"):
+        # Search-rich description; kept mention-free so the indexed text stays clean.
+        return (
+            clip_meta.get("video_description_for_youtube_short")
+            or clip_meta.get("video_title_for_youtube_short", "")
+        )
+    if s in ("googlebusiness",):
         return clip_meta.get("video_title_for_youtube_short", "")
     if s in ("instagram",):
         text = clip_meta.get("video_description_for_instagram", "")
@@ -2302,6 +2312,14 @@ def _caption_for_service(clip_meta, service):
             or clip_meta.get("video_title_for_youtube_short", "")
         )
     return _append_mentions(text)
+
+
+def _title_for_service(clip_meta, service):
+    """The separate video title for services that need one (YouTube). None otherwise."""
+    s = (service or "").lower()
+    if s in ("youtube", "youtube_shorts"):
+        return clip_meta.get("video_title_for_youtube_short", "")
+    return None
 
 
 class ChannelTarget(BaseModel):
@@ -2448,6 +2466,7 @@ async def schedule_endpoint(
             continue
         for ch in req.channels:
             text = _caption_for_service(clip["meta"], ch.service)
+            title = _title_for_service(clip["meta"], ch.service)
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
@@ -2459,6 +2478,7 @@ async def schedule_endpoint(
                 post_at,
                 ch.service,
                 None,
+                title,
             )
             results.append(
                 {
