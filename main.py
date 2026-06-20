@@ -964,7 +964,7 @@ def get_viral_clips(transcript_result, video_duration):
         print(f"❌ Gemini Error: {e}")
         return None
 
-def append_outro(video_path, outro_image_path, output_path, duration=1.0, xfade=0.3):
+def append_outro(video_path, outro_image_path, output_path, duration=3.0, xfade=0.3):
     """
     Append a static branded outro frame at the end of the video with a crossfade
     transition. Audio crossfades to silence over the same window. Output matches
