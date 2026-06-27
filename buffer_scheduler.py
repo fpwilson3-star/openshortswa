@@ -85,34 +85,76 @@ def plan_schedule(clips, episode_drop_iso, num_days, gemini_api_key):
     return data.get("schedule", [])
 
 
-CHANNELS_QUERY = """
-query Channels {
+# Buffer's schema does NOT expose channels under `account` — `channels` is a
+# top-level query that requires an organizationId. Org ids come from `account`.
+ORGANIZATIONS_QUERY = """
+query Organizations {
   account {
-    channels {
+    organizations {
       id
-      name
-      service
     }
   }
 }
 """
 
+def _channels_query(org_id):
+    """Build the channels query with the org id inlined as a GraphQL literal.
+
+    We inline rather than use a typed variable (the createPost mutation does the
+    same) so we don't have to know the schema's exact scalar type for the input —
+    a wrong variable type (String! vs ID!) makes Buffer reject the request with 400.
+    """
+    return (
+        "query Channels {\n"
+        f"  channels(input: {{ organizationId: {json.dumps(org_id)} }}) {{\n"
+        "    id\n"
+        "    name\n"
+        "    service\n"
+        "  }\n"
+        "}\n"
+    )
+
+
+def _graphql(client, headers, query):
+    """POST a GraphQL query, raise on transport/GraphQL errors, return the data block."""
+    resp = client.post(BUFFER_API_URL, headers=headers, json={"query": query})
+    if resp.status_code != 200:
+        # Surface the response body — Buffer puts the real reason (bad query,
+        # missing scope) there, and raise_for_status alone would hide it.
+        raise RuntimeError(f"Buffer HTTP {resp.status_code}: {resp.text[:500]}")
+    body = resp.json()
+    if "errors" in body:
+        raise RuntimeError(f"Buffer error: {body['errors']}")
+    return body.get("data", {}) or {}
+
 
 def list_channels(buffer_token):
-    """Return [{id, name, service}, ...] for the user's connected Buffer channels."""
+    """Return [{id, name, service}, ...] for the user's connected Buffer channels.
+
+    Buffer scopes channels to an organization, so we first resolve the account's
+    organization id(s), then fetch channels for each and combine (deduped by id).
+    """
     headers = {
         "Authorization": f"Bearer {buffer_token}",
         "Content-Type": "application/json",
     }
     with httpx.Client(timeout=30) as client:
-        resp = client.post(BUFFER_API_URL, headers=headers, json={"query": CHANNELS_QUERY})
-        resp.raise_for_status()
-        body = resp.json()
+        orgs = _graphql(client, headers, ORGANIZATIONS_QUERY) \
+            .get("account", {}).get("organizations", []) or []
+        if not orgs:
+            raise RuntimeError("Buffer account has no organizations")
 
-    if "errors" in body:
-        raise RuntimeError(f"Buffer error: {body['errors']}")
+        channels_by_id = {}
+        for org in orgs:
+            org_id = org.get("id")
+            if not org_id:
+                continue
+            data = _graphql(client, headers, _channels_query(org_id))
+            for ch in data.get("channels", []) or []:
+                if ch.get("id"):
+                    channels_by_id[ch["id"]] = ch
 
-    return body.get("data", {}).get("account", {}).get("channels", [])
+    return list(channels_by_id.values())
 
 
 def _build_metadata_literal(service, text, title=None):

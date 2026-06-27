@@ -36,7 +36,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 1. **Ingest** - YouTube download (yt-dlp) or local upload
 2. **Transcription** - faster-whisper with word-level timestamps
 3. **Scene Detection** - PySceneDetect for segment boundaries
-4. **AI Analysis** - Gemini identifies 3-15 viral moments (15-60 sec each)
+4. **AI Analysis** - Gemini identifies 3-15 viral moments (15-180 sec each; prefers under 60 sec)
 5. **FFmpeg Extraction** - Precise clip cutting
 6. **AI Cropping** - Vertical reframing with subject tracking
 7. **Effects/Subtitles** - Optional AI-generated FFmpeg filters

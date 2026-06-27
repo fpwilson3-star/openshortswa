@@ -31,18 +31,32 @@ load_dotenv()
 ASPECT_RATIO = 9 / 16
 
 GEMINI_PROMPT_TEMPLATE = """
-You are a senior short-form video editor. Read the ENTIRE transcript and word-level timestamps to choose the 3–15 MOST VIRAL moments for TikTok/IG Reels/YouTube Shorts. Each clip must be between 15 and 60 seconds long.
+You are a senior short-form video editor. Read the ENTIRE transcript and word-level timestamps to choose the 3–15 MOST VIRAL moments for TikTok/IG Reels/YouTube Shorts. Clips run 15–180 seconds; STRONGLY PREFER under 60 s, but let a genuinely great moment run longer when it needs the room to land (see CLIP LENGTH & ENDING below).
 
 SHOW CONTEXT:
 This is "Wellness Actually", a health and medicine podcast hosted by a physician. The best moments are counterintuitive-but-credible: myth-busting, surprising evidence, practical health takeaways, and candid moments that humanize medicine. Captions and hooks must sound evidence-minded and credible — never alarmist, never pseudo-scientific.
+
+🪝 OPENING-LINE HOOK RULE — THIS IS THE #1 SELECTION CRITERION:
+The FIRST SPOKEN SENTENCE of the clip IS the hook. It determines whether the viewer keeps watching, so choose your `start` so the clip BEGINS on a sentence that:
+- Stands completely on its own — fully intelligible to someone who has never heard the rest of the episode.
+- Makes a concrete, specific, curiosity-provoking claim or asks a sharp question — a surprising fact, a myth being busted, a bold statement, a "wait, what?" moment.
+- Does NOT reference anything outside the clip. REJECT openings that start with: "So...", "And...", "But...", "Yeah...", "Right...", "Well...", "That's...", "It...", "This...", "Like I said", "As we mentioned", "Going back to", or any pronoun/demonstrative ("it", "that", "this", "they", "those") whose referent was established earlier in the episode. If the first words only make sense given prior context, that is a BAD cut — move `start` forward to the next sentence that truly stands alone, or pick a different moment entirely.
+- Is not a vague tease ("there's something really interesting here", "you won't believe this") — it must deliver actual substance immediately.
+A clip with a weak or context-dependent opening sentence should be DROPPED in favor of one whose first sentence grabs attention by itself, even if the overall moment is slightly less strong. Prioritize a self-contained, magnetic opening line above all else.
 
 ⚠️ FFMPEG TIME CONTRACT — STRICT REQUIREMENTS:
 - Return timestamps in ABSOLUTE SECONDS from the start of the video (usable in: ffmpeg -ss <start> -to <end> -i <input> ...).
 - Only NUMBERS with decimal point, up to 3 decimals (examples: 0, 1.250, 17.350).
 - Ensure 0 ≤ start < end ≤ VIDEO_DURATION_SECONDS.
-- Each clip between 15 and 60 s (inclusive).
-- Prefer starting 0.2–0.4 s BEFORE the hook and ending 0.2–0.4 s AFTER the payoff.
+- Each clip between 15 and 180 s (inclusive). Prefer under 60 s; only exceed it when the moment genuinely earns the extra runtime.
+- Prefer starting 0.2–0.4 s BEFORE the hook. End 0.2–0.4 s AFTER the moment fully RESOLVES (see CLIP LENGTH & ENDING).
 - Use silence moments for natural cuts; never cut in the middle of a word or phrase.
+
+✂️ CLIP LENGTH & ENDING — LET THE THOUGHT COMPLETE:
+- A clip must END on a COMPLETE THOUGHT, not on the first punchline. Let the idea fully land: include the sentence that finishes the point, any essential supporting detail, and a brief beat of the speaker's reaction or conclusion.
+- NEVER end mid-sentence or on a trailing/leading conjunction or setup word ("because…", "and so…", "which means…", "but…", "the thing is…"). If the last words leave the listener hanging, extend `end` to the next natural stopping point.
+- A common failure is cutting too soon. When in doubt, keep rolling to the natural pause where the speaker clearly finishes the idea — do NOT trim to the bare minimum.
+- Length should be driven by where the thought naturally completes, NOT by a target duration. Prefer under 60 s, but a self-contained, well-resolved moment may run up to 180 s when the content truly warrants it. Do not pad with filler to get longer, and do not amputate a great moment to stay short.
 - STRICTLY FORBIDDEN to use time formats other than absolute seconds.
 
 VIDEO_DURATION_SECONDS: {video_duration}
@@ -55,7 +69,7 @@ WORDS_JSON (array of {{w, s, e}} where s/e are seconds):
 
 STRICT EXCLUSIONS:
 - No generic intros/outros or purely sponsorship segments unless they contain the hook.
-- No clips < 15 s or > 60 s.
+- No clips < 15 s or > 180 s.
 
 CAPTION STYLE — value-first, never growth-hack:
 - Lead with the actual takeaway, insight, or tension from the clip. The reader should be able to "get it" without watching — counterintuitively, this drives MORE watch-through because it signals the clip is worth their time.
@@ -1146,7 +1160,7 @@ if __name__ == '__main__':
                     if hook_text:
                         hooked_path = os.path.join(output_dir, f"hooked_{clip_filename}")
                         try:
-                            add_hook_to_video(clip_final_path, hook_text, hooked_path, position="top", font_scale=1.0, duration=5)
+                            add_hook_to_video(clip_final_path, hook_text, hooked_path, position="upper", font_scale=1.0, duration=5)
                             os.replace(hooked_path, clip_final_path)
                             print(f"   🎯 Auto-hook applied (first 5s): '{hook_text}'")
                         except Exception as e:

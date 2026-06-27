@@ -147,7 +147,7 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
 def add_hook_to_video(video_path, text, output_path, position="top", font_scale=1.0, duration=None):
     """
     Overlays text hook onto video.
-    position: 'top', 'center', 'bottom'
+    position: 'top', 'upper', 'center', 'bottom'
     font_scale: float multiplier (1.0 = default)
     duration: if set, overlay only displays for the first `duration` seconds
     """
@@ -186,6 +186,11 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
 
         if position == "center":
             overlay_y = (video_height - box_h) // 2
+        elif position == "upper":
+             # Upper third (~30%) — high enough to read as a thumbnail in the
+             # feed/profile grid, but clear of the centered talking-head face
+             # and the bottom ~20% where burned captions + platform UI live
+             overlay_y = int(video_height * 0.30)
         elif position == "bottom":
              # Bottom 20% mark (approx)
              overlay_y = int(video_height * 0.70)
