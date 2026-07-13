@@ -2310,7 +2310,9 @@ def _caption_for_service(clip_meta, service):
     if s in ("instagram",):
         text = clip_meta.get("video_description_for_instagram", "")
     elif s in ("tiktok",):
-        text = clip_meta.get("video_description_for_tiktok", "")
+        # No default @mentions on TikTok: the caption is deliberately short and
+        # keyword-led, and the IG handles aren't established there.
+        return clip_meta.get("video_description_for_tiktok", "")
     else:
         text = (
             clip_meta.get("video_description_for_instagram")
@@ -2339,6 +2341,11 @@ class ScheduleRequest(BaseModel):
     episode_drop_iso: str
     num_days: int = 7
     channels: List[ChannelTarget]
+    # TikTok's Content Posting API can't attach sounds, so auto-published posts
+    # keep original audio only. When true, TikTok posts are sent as Buffer
+    # "notification" posts instead: the mobile app pings at the due time and the
+    # post is finished natively in TikTok, where a quiet backing sound can be added.
+    tiktok_notification: bool = False
 
 
 @app.get("/api/buffer/channels")
@@ -2473,6 +2480,8 @@ async def schedule_endpoint(
         for ch in req.channels:
             text = _caption_for_service(clip["meta"], ch.service)
             title = _title_for_service(clip["meta"], ch.service)
+            is_tiktok = (ch.service or "").lower() == "tiktok"
+            scheduling_type = "notification" if (is_tiktok and req.tiktok_notification) else "automatic"
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
@@ -2485,6 +2494,7 @@ async def schedule_endpoint(
                 ch.service,
                 None,
                 title,
+                scheduling_type,
             )
             results.append(
                 {

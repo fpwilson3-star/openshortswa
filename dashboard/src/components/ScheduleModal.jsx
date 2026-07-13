@@ -31,6 +31,7 @@ export default function ScheduleModal({ isOpen, onClose, clips, jobId, bufferTok
   const [selectedClips, setSelectedClips] = useState(() => new Set());
   const [episodeDropLocal, setEpisodeDropLocal] = useState(() => nowPlusHoursLocal(24));
   const [numDays, setNumDays] = useState(7);
+  const [tiktokNotification, setTiktokNotification] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [results, setResults] = useState(null);
   const [submitError, setSubmitError] = useState('');
@@ -116,6 +117,7 @@ export default function ScheduleModal({ isOpen, onClose, clips, jobId, bufferTok
         episode_drop_iso: episodeIso,
         num_days: numDays,
         channels: channelTargets,
+        tiktok_notification: tiktokNotification,
       };
 
       const res = await fetch(getApiUrl('/api/schedule'), {
@@ -260,6 +262,28 @@ export default function ScheduleModal({ isOpen, onClose, clips, jobId, bufferTok
             </div>
           )}
         </div>
+
+        {/* TikTok sound option — API posts can't attach TikTok sounds, so offer
+            notification publishing (finish the post in the app to add one). */}
+        {channels.some(
+          (c) => selectedChannels.has(c.id) && (c.service || '').toLowerCase() === 'tiktok'
+        ) && (
+          <label className="mb-5 flex items-start gap-2 text-xs text-zinc-400 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={tiktokNotification}
+              onChange={(e) => setTiktokNotification(e.target.checked)}
+              disabled={scheduling}
+              className="mt-0.5 accent-cyan-400 cursor-pointer"
+            />
+            <span>
+              <span className="text-zinc-300 font-medium">TikTok: finish posts in the app</span>{' '}
+              — Buffer's mobile app pings you at each scheduled time and you publish natively,
+              so you can add a quiet backing sound (TikTok's API can't attach sounds).
+              Off = fully automatic posting with original audio.
+            </span>
+          </label>
+        )}
 
         {/* Clip selection */}
         <div className="mb-5">

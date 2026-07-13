@@ -173,21 +173,30 @@ def _build_metadata_literal(service, text, title=None):
     return None
 
 
-def _build_create_post_mutation(text, channel_id, due_at_iso, video_url, service, thumbnail_url=None, title=None):
+def _build_create_post_mutation(text, channel_id, due_at_iso, video_url, service, thumbnail_url=None, title=None,
+                                scheduling_type="automatic"):
     """
     Build the createPost mutation with everything inlined as GraphQL literals.
     GraphQL server infers types from the input shape, so we don't need to know
     internal type names like PostAssetInput.
+
+    scheduling_type: "automatic" (Buffer publishes directly) or "notification"
+    (Buffer pings the mobile app at the due time and the user finishes the post
+    natively — the only route that allows adding a TikTok sound, since TikTok's
+    Content Posting API can't attach audio).
     """
     video_fields = [f"url: {json.dumps(video_url)}"]
     if thumbnail_url:
         video_fields.append(f"thumbnailUrl: {json.dumps(thumbnail_url)}")
     video_literal = "{ " + ", ".join(video_fields) + " }"
 
+    # schedulingType is a GraphQL enum — inline unquoted, whitelisted values only.
+    sched = scheduling_type if scheduling_type in ("automatic", "notification") else "automatic"
+
     input_fields = [
         f"text: {json.dumps(text)}",
         f"channelId: {json.dumps(channel_id)}",
-        "schedulingType: automatic",
+        f"schedulingType: {sched}",
         "mode: customScheduled",
         f"dueAt: {json.dumps(due_at_iso)}",
         f"assets: [{{ video: {video_literal} }}]",
@@ -218,16 +227,19 @@ def _build_create_post_mutation(text, channel_id, due_at_iso, video_url, service
     )
 
 
-def submit_post(buffer_token, channel_id, text, video_url, due_at_iso, service, thumbnail_url=None, title=None):
+def submit_post(buffer_token, channel_id, text, video_url, due_at_iso, service, thumbnail_url=None, title=None,
+                scheduling_type="automatic"):
     """
     Submit one scheduled post to Buffer (one channel per call).
 
     `text` is the post body (the YouTube description / IG-TikTok caption). `title`
     is used only for services that need a separate video title (YouTube); when
-    omitted it falls back to `text`.
+    omitted it falls back to `text`. `scheduling_type` "notification" sends a
+    finish-in-app reminder instead of auto-publishing (see _build_create_post_mutation).
     Returns {success: bool, post_id?, due_at?, error?}.
     """
-    mutation = _build_create_post_mutation(text, channel_id, due_at_iso, video_url, service, thumbnail_url, title)
+    mutation = _build_create_post_mutation(text, channel_id, due_at_iso, video_url, service, thumbnail_url, title,
+                                           scheduling_type)
 
     headers = {
         "Authorization": f"Bearer {buffer_token}",
