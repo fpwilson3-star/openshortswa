@@ -9,6 +9,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [file, setFile] = useState(null);
     const [acknowledged, setAcknowledged] = useState(false);
     const [burnSubtitles, setBurnSubtitles] = useState(false);
+    const [addBroll, setAddBroll] = useState(false);
 
     useEffect(() => {
         fetch(getApiUrl('/api/config'))
@@ -26,9 +27,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
         e.preventDefault();
         if (!acknowledged) return;
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true, burnSubtitles });
+            onProcess({ type: 'url', payload: url, acknowledged: true, burnSubtitles, addBroll });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file, acknowledged: true, burnSubtitles });
+            onProcess({ type: 'file', payload: file, acknowledged: true, burnSubtitles, addBroll });
         }
     };
 
@@ -123,6 +124,18 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     />
                     <span>
                         Burn karaoke captions into each clip (word-by-word highlight).
+                    </span>
+                </label>
+
+                <label className="flex items-start gap-2 mt-3 text-xs text-zinc-400 cursor-pointer select-none">
+                    <input
+                        type="checkbox"
+                        checked={addBroll}
+                        onChange={(e) => setAddBroll(e.target.checked)}
+                        className="mt-0.5 accent-primary cursor-pointer"
+                    />
+                    <span>
+                        Add B-roll cutaways (stock images &amp; video that illustrate what's being said).
                     </span>
                 </label>
 

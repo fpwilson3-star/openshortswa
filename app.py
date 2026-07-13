@@ -319,7 +319,8 @@ async def process_endpoint(
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
     acknowledged: Optional[str] = Form(None),
-    burn_subtitles: Optional[str] = Form(None)
+    burn_subtitles: Optional[str] = Form(None),
+    add_broll: Optional[str] = Form(None)
 ):
     api_key = request.headers.get("X-Gemini-Key")
     if not api_key:
@@ -327,6 +328,7 @@ async def process_endpoint(
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
     burn_subs_flag = str(burn_subtitles).lower() in ("1", "true", "yes")
+    add_broll_flag = str(add_broll).lower() in ("1", "true", "yes")
 
     # Handle JSON body manually for URL payload
     content_type = request.headers.get("content-type", "")
@@ -335,6 +337,7 @@ async def process_endpoint(
         url = body.get("url")
         ack_flag = bool(body.get("acknowledged"))
         burn_subs_flag = bool(body.get("burn_subtitles"))
+        add_broll_flag = bool(body.get("add_broll"))
 
     if not url and not file:
         raise HTTPException(status_code=400, detail="Must provide URL or File")
@@ -393,6 +396,9 @@ async def process_endpoint(
 
     if burn_subs_flag:
         cmd.append("--burn-subtitles")
+
+    if add_broll_flag:
+        cmd.append("--add-broll")
 
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 

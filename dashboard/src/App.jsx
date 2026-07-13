@@ -353,12 +353,14 @@ function App() {
           url: data.payload,
           acknowledged: !!data.acknowledged,
           burn_subtitles: !!data.burnSubtitles,
+          add_broll: !!data.addBroll,
         });
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
         formData.append('burn_subtitles', data.burnSubtitles ? 'true' : 'false');
+        formData.append('add_broll', data.addBroll ? 'true' : 'false');
         body = formData;
       }
 

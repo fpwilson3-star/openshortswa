@@ -19,7 +19,7 @@ from google import genai
 from dotenv import load_dotenv
 import json
 from hooks import add_hook_to_video
-from gemini_utils import GEMINI_MODELS, gemini_generate_with_fallback
+from gemini_utils import GEMINI_PRO_MODELS, gemini_generate_with_fallback
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf')
@@ -43,6 +43,24 @@ The FIRST SPOKEN SENTENCE of the clip IS the hook. It determines whether the vie
 - Does NOT reference anything outside the clip. REJECT openings that start with: "So...", "And...", "But...", "Yeah...", "Right...", "Well...", "That's...", "It...", "This...", "Like I said", "As we mentioned", "Going back to", or any pronoun/demonstrative ("it", "that", "this", "they", "those") whose referent was established earlier in the episode. If the first words only make sense given prior context, that is a BAD cut — move `start` forward to the next sentence that truly stands alone, or pick a different moment entirely.
 - Is not a vague tease ("there's something really interesting here", "you won't believe this") — it must deliver actual substance immediately.
 A clip with a weak or context-dependent opening sentence should be DROPPED in favor of one whose first sentence grabs attention by itself, even if the overall moment is slightly less strong. Prioritize a self-contained, magnetic opening line above all else.
+
+🎯 SELECTION RUBRIC — THIS IS HOW YOU DECIDE WHAT MAKES THE CUT:
+Do NOT return segments just because they are coherent or mildly interesting. A podcast is full of competent-but-flat talk; your job is to find the few moments that would actually stop a thumb. For every candidate, work through this before including it:
+
+1. ARCHETYPE — every clip MUST clearly be one of these. If a segment doesn't fit any, it is not viral enough — drop it.
+   - "myth_bust": a widely-held belief is shown to be wrong.
+   - "counterintuitive_stat": a surprising number, fact, or finding that upends intuition.
+   - "contrarian_take": the physician pushes against consensus or conventional advice.
+   - "vulnerable_human": a candid, personal, or emotionally honest moment that humanizes medicine.
+   - "actionable_protocol": a concrete, specific "do this" takeaway the viewer can apply.
+
+2. TENSION → PAYOFF — the clip must SET UP a question, stake, or expectation and then RESOLVE it inside the clip. REJECT all-setup-with-no-payoff (unsatisfying) and all-payoff-with-no-setup (confusing, no context to make the payoff land).
+
+3. PUNCH SCORE — rate each candidate 1–10 on "would a stranger scrolling stop and watch this?" ONLY include clips that score 7 or higher. Be a harsh grader; most of the episode is a 3–5.
+
+4. HARD REJECTS — never return segments that are primarily: general definitions or textbook explanation, both hosts simply agreeing, "it depends"/hedging with no clear stance, logistics/scheduling/housekeeping talk, guest-bio recitation, or meandering setup that never pays off.
+
+5. FEWER, EXCEPTIONAL — quality over quantity, always. If only 3 truly exceptional moments exist, return 3. NEVER pad the list toward 15 to fill it out — a padded slate of mediocre clips is a FAILURE, not a success. It is better to return 4 great clips than 10 average ones.
 
 ⚠️ FFMPEG TIME CONTRACT — STRICT REQUIREMENTS:
 - Return timestamps in ABSOLUTE SECONDS from the start of the video (usable in: ffmpeg -ss <start> -to <end> -i <input> ...).
@@ -91,6 +109,8 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
     {{
       "start": <number in seconds, e.g., 12.340>,
       "end": <number in seconds, e.g., 37.900>,
+      "archetype": "<one of: myth_bust | counterintuitive_stat | contrarian_take | vulnerable_human | actionable_protocol>",
+      "punch_score": <integer 1-10, your honest scroll-stopping rating; only clips scoring 7+ should appear here>,
       "video_description_for_tiktok": "<TikTok caption per style rules above>",
       "video_description_for_instagram": "<Instagram caption per style rules above>",
       "video_title_for_youtube_short": "<YouTube Short title per style rules above, ≤100 chars>",
@@ -898,7 +918,7 @@ def get_viral_clips(transcript_result, video_duration):
 
     client = genai.Client(api_key=api_key)
 
-    print(f"🤖  Initializing Gemini (preferred: {GEMINI_MODELS[0]})")
+    print(f"🤖  Initializing Gemini (preferred: {GEMINI_PRO_MODELS[0]})")
 
     # Extract words
     words = []
@@ -920,7 +940,13 @@ def get_viral_clips(transcript_result, video_duration):
     # exponential backoff, and fall back to an alternate model if the preferred
     # one is unavailable. A hard failure returns None so the caller can fail the
     # job cleanly instead of silently converting the whole video.
-    response, model_name = gemini_generate_with_fallback(client, prompt)
+    # Force structured JSON output so the response is guaranteed valid, fence-free
+    # JSON — Gemini otherwise occasionally emits malformed JSON (unescaped chars in
+    # captions) that aborts the whole analysis on json.loads.
+    response, model_name = gemini_generate_with_fallback(
+        client, prompt, models=GEMINI_PRO_MODELS,
+        config={"response_mime_type": "application/json"},
+    )
     if response is None:
         return None
 
@@ -1035,6 +1061,7 @@ if __name__ == '__main__':
     parser.add_argument('--keep-original', action='store_true', help="Keep the downloaded YouTube video.")
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
     parser.add_argument('--burn-subtitles', action='store_true', help="Burn subtitles into each clip using default styling.")
+    parser.add_argument('--add-broll', action='store_true', help="Insert AI-planned full-frame B-roll cutaways (Pexels). Needs PEXELS_API_KEY.")
     
     args = parser.parse_args()
 
@@ -1129,6 +1156,8 @@ if __name__ == '__main__':
                 end = clip['end']
                 print(f"\n🎬 Processing Clip {i+1}: {start}s - {end}s")
                 print(f"   Title: {clip.get('video_title_for_youtube_short', 'No Title')}")
+                if clip.get('archetype') or clip.get('punch_score') is not None:
+                    print(f"   Why: {clip.get('archetype', '?')} · punch {clip.get('punch_score', '?')}/10")
                 
                 # Cut clip
                 clip_filename = f"{video_title}_clip_{i+1}.mp4"
@@ -1155,6 +1184,22 @@ if __name__ == '__main__':
 
                 if success:
                     print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
+
+                    # B-roll cutaways go in BEFORE the hook/captions so those
+                    # overlays render on top of the full-frame cutaways.
+                    if args.add_broll:
+                        broll_out = os.path.join(output_dir, f"broll_{clip_filename}")
+                        try:
+                            from broll import add_broll_to_video
+                            if add_broll_to_video(clip_final_path, transcript, start, end, broll_out):
+                                os.replace(broll_out, clip_final_path)
+                                print(f"   🎞️  B-roll cutaways added to clip {i+1}")
+                            elif os.path.exists(broll_out):
+                                os.remove(broll_out)
+                        except Exception as e:
+                            print(f"   ⚠️ B-roll insertion failed for clip {i+1}: {e}")
+                            if os.path.exists(broll_out):
+                                os.remove(broll_out)
 
                     hook_text = (clip.get('viral_hook_text') or '').strip()
                     if hook_text:
